@@ -1,0 +1,11 @@
+{
+  "name": "uu-remote-bridge",
+  "version": "1.0.0",
+  "description": "AI Agent bridge for NetEase UU Remote (GameViewer): non-interactive exec / file transfer / pty via official uuyc-cli. Production-tested.",
+  "keywords": ["pi-package", "uu-remote", "gameviewer", "agent-skills", "remote-terminal"],
+  "license": "MIT",
+  "repository": "github:youki258/uu-remote-bridge",
+  "pi": {
+    "skills": ["."]
+  }
+}
