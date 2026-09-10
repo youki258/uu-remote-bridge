@@ -24,7 +24,7 @@
 ## 安装
 
 ```powershell
-git clone https://github.com/<you>/uu-remote-bridge.git
+git clone https://github.com/youki258/uu-remote-bridge.git
 ```
 
 **前置**：本机 UU远程主程序运行且已登录；远程机装有 UU远程被控端；Node.js ≥ 20。主控/被控端实测版本：UU远程 4.38.3（CLI 1.0.0），Windows → Windows。
@@ -69,7 +69,7 @@ $t = [IO.File]::ReadAllText('.\run.bat'); [IO.File]::WriteAllText('.\run-gbk.bat
 ## 致谢与来源
 
 - [song-chaoyang/uu-remote-vscode](https://github.com/song-chaoyang/uu-remote-vscode)（MIT）——本项目的 TermBridge/VT 屏幕解析核心由此提取
-- [yinren112/uu-remote-ops](https://github.com/yinren112/uu-remote-ops)（无许可证，仅致谢思路，未 redistribut 其代码）——会话卫生/409/PS 5.1 差异等运营知识
+- [yinren112/uu-remote-ops](https://github.com/yinren112/uu-remote-ops)（无许可证，仅致谢思路，未 redistribute 其代码）——会话卫生/409/PS 5.1 差异等运营知识
 - [网易 UU远程 官方 CLI 文档](https://uuyc.163.com/help/cli.html) 与官方 CLI SKILL——管理面规范与 JSON/错误码约定
 
 ## 免责声明

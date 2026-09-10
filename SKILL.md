@@ -57,9 +57,9 @@ node "%USERPROFILE%\.agents\skills\uu-remote-bridge\bin\uu-bridge.cjs" <子命�
 
 ```powershell
 node ...\bin\uu-bridge.cjs list
-node ...\bin\uu-bridge.cjs exec <YOUR_DEVICE_ID> "Get-PSDrive -PSProvider FileSystem"
-node ...\bin\uu-bridge.cjs exec <YOUR_DEVICE_ID> "Get-Content C:\Users\xx\log.txt -Tail 20"
-pwsh -File scripts\uu-push-file.ps1 -DeviceId <YOUR_DEVICE_ID> -LocalPath .\fix.ps1 -RemotePath 'C:\fix.ps1'
+node ...\bin\uu-bridge.cjs exec <device_id> "Get-PSDrive -PSProvider FileSystem"
+node ...\bin\uu-bridge.cjs exec <device_id> "Get-Content C:\Users\xx\log.txt -Tail 20"
+pwsh -File scripts\uu-push-file.ps1 -DeviceId <device_id> -LocalPath .\fix.ps1 -RemotePath 'C:\fix.ps1'
 ```
 
 ## 运营铁律（真实交付踩坑，违反必付代价）
