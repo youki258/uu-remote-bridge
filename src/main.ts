@@ -3,18 +3,22 @@
  * Reuses TermBridge from song-chaoyang/uu-remote-vscode (MIT-style reuse for local automation).
  *
  * Usage:
+ *   node uu-bridge.cjs doctor                      (只读预检:CLI/主程序/版本/设备在线)
  *   node uu-bridge.cjs list
  *   node uu-bridge.cjs exec  <device_id> "<command>" [--shell powershell|cmd|zsh|bash]
  *   node uu-bridge.cjs read  <device_id> <remote_path>
  *   node uu-bridge.cjs write <device_id> <remote_path> <local_file>
  *   node uu-bridge.cjs pty   <device_id>            (interactive: stdin lines -> screen snapshots, 'exit' quits)
+ *
+ * CLI 路径可用环境变量 UU_CLI_PATH 指定;否则自动探测常见安装位置。
  */
-import { listDevices } from './cli';
+import { listDevices, resolveCliPath } from './cli';
+import { runDoctor } from './doctor';
 import { TermBridge } from './termBridge';
 import type { ShellKind } from './types';
 
-const DEFAULT_CLI = 'C:\\Program Files\\Netease\\GameViewer\\bin\\uuyc-cli.exe';
-const cliPath = () => process.env['UU_CLI_PATH'] || DEFAULT_CLI;
+/** CLI 路径：UU_CLI_PATH 优先，否则探测常见安装位置（多盘符 / LOCALAPPDATA / PATH） */
+const resolveCli = () => resolveCliPath(process.env['UU_CLI_PATH']);
 
 function parseArgs(argv: string[]) {
   const shellIdx = argv.indexOf('--shell');
@@ -30,8 +34,15 @@ async function main() {
   const { shell, args } = parseArgs(process.argv.slice(2));
   const [cmd, ...rest] = args;
 
+  if (cmd === 'doctor') {
+    process.exitCode = await runDoctor(process.env['UU_CLI_PATH']);
+    return;
+  }
+
+  const cli = await resolveCli();
+
   if (cmd === 'list') {
-    const devices = await listDevices(cliPath());
+    const devices = await listDevices(cli);
     for (const d of devices) {
       console.log(`${d.deviceId}\t${d.deviceName}\tonline=${d.isOnline}\tplatform=${d.platform}`);
     }
@@ -51,7 +62,7 @@ async function main() {
 
   if (cmd === 'sessions') {
     const { execCliText } = await import('./cli');
-    const out = await execCliText(cliPath(), ['term', '--device-id', deviceId, '--list-sessions'], { timeoutMs: 30000 });
+    const out = await execCliText(cli, ['term', '--device-id', deviceId, '--list-sessions'], { timeoutMs: 30000 });
     console.log(out.trim() || '(no sessions)');
     return;
   }
@@ -63,7 +74,7 @@ async function main() {
       process.exit(2);
     }
     const { execCliText } = await import('./cli');
-    const out = await execCliText(cliPath(), ['term', '--device-id', deviceId, '--kill-session', sid], { timeoutMs: 30000 });
+    const out = await execCliText(cli, ['term', '--device-id', deviceId, '--kill-session', sid], { timeoutMs: 30000 });
     console.log(out.trim() || `session ${sid} killed`);
     return;
   }
@@ -74,7 +85,7 @@ async function main() {
       console.error('command required');
       process.exit(2);
     }
-    const bridge = new TermBridge(cliPath(), deviceId, shell);
+    const bridge = new TermBridge(cli, deviceId, shell);
     try {
       const rows = await bridge.execRows(command, { timeoutMs: 90000 });
       console.log(rows.length > 0 ? rows.join('\n') : '(no output)');
@@ -86,7 +97,7 @@ async function main() {
 
   if (cmd === 'read') {
     const path = rest[1];
-    const bridge = new TermBridge(cliPath(), deviceId, shell);
+    const bridge = new TermBridge(cli, deviceId, shell);
     try {
       const rows = await bridge.readFileB64(path, 256 * 1024);
       const first = rows[0] ?? '';
@@ -110,7 +121,7 @@ async function main() {
     }
     const { readFileSync } = await import('fs');
     const content = readFileSync(localFile);
-    const bridge = new TermBridge(cliPath(), deviceId, shell);
+    const bridge = new TermBridge(cli, deviceId, shell);
     try {
       await bridge.writeFile(path, content);
       console.log(`written ${path} (${content.length} bytes)`);
@@ -121,7 +132,7 @@ async function main() {
   }
 
   if (cmd === 'pty') {
-    const bridge = new TermBridge(cliPath(), deviceId, shell);
+    const bridge = new TermBridge(cli, deviceId, shell);
     await bridge.ensureReady();
     console.log('--- pty ready; type lines, Ctrl-D / "exit" to quit ---');
     const readline = await import('readline');

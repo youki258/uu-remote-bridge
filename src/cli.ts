@@ -108,7 +108,7 @@ export async function resolveCliPath(configured?: string): Promise<string> {
     if (existsSync(p)) {
       return p;
     }
-    throw new CliError(`配置的 uu.cliPath 不存在:${p}`);
+    throw new CliError(`指定的 CLI 路径不存在:${p}（来源:UU_CLI_PATH 环境变量或 uu.cliPath 配置）`);
   }
   for (const p of candidateCliPaths()) {
     if (existsSync(p)) {
@@ -121,7 +121,7 @@ export async function resolveCliPath(configured?: string): Promise<string> {
     }
   }
   throw new CliError(
-    '未找到 uuyc-cli。请确认已安装 UU远程主程序,或在设置 "uu.cliPath" 中指定 CLI 完整路径(通常位于 UU远程安装目录的 bin\\uuyc-cli.exe)。',
+    '未找到 uuyc-cli。请确认已安装 UU远程主程序(CLI 位于安装目录 bin 下),或用环境变量 UU_CLI_PATH 指定完整路径(设置项 "uu.cliPath" 同理)。',
   );
 }
 

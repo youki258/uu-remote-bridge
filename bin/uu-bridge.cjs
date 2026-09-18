@@ -117,7 +117,7 @@ async function resolveCliPath(configured) {
     if ((0, import_fs.existsSync)(p)) {
       return p;
     }
-    throw new CliError(`\u914D\u7F6E\u7684 uu.cliPath \u4E0D\u5B58\u5728:${p}`);
+    throw new CliError(`\u6307\u5B9A\u7684 CLI \u8DEF\u5F84\u4E0D\u5B58\u5728:${p}\uFF08\u6765\u6E90:UU_CLI_PATH \u73AF\u5883\u53D8\u91CF\u6216 uu.cliPath \u914D\u7F6E\uFF09`);
   }
   for (const p of candidateCliPaths()) {
     if ((0, import_fs.existsSync)(p)) {
@@ -130,13 +130,13 @@ async function resolveCliPath(configured) {
     }
   }
   throw new CliError(
-    '\u672A\u627E\u5230 uuyc-cli\u3002\u8BF7\u786E\u8BA4\u5DF2\u5B89\u88C5 UU\u8FDC\u7A0B\u4E3B\u7A0B\u5E8F,\u6216\u5728\u8BBE\u7F6E "uu.cliPath" \u4E2D\u6307\u5B9A CLI \u5B8C\u6574\u8DEF\u5F84(\u901A\u5E38\u4F4D\u4E8E UU\u8FDC\u7A0B\u5B89\u88C5\u76EE\u5F55\u7684 bin\\uuyc-cli.exe)\u3002'
+    '\u672A\u627E\u5230 uuyc-cli\u3002\u8BF7\u786E\u8BA4\u5DF2\u5B89\u88C5 UU\u8FDC\u7A0B\u4E3B\u7A0B\u5E8F(CLI \u4F4D\u4E8E\u5B89\u88C5\u76EE\u5F55 bin \u4E0B),\u6216\u7528\u73AF\u5883\u53D8\u91CF UU_CLI_PATH \u6307\u5B9A\u5B8C\u6574\u8DEF\u5F84(\u8BBE\u7F6E\u9879 "uu.cliPath" \u540C\u7406)\u3002'
   );
 }
-async function execCli(cliPath2, args, opts = {}) {
+async function execCli(cliPath, args, opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 15e3;
   return new Promise((resolve, reject) => {
-    const child = (0, import_child_process.spawn)(cliPath2, args, { windowsHide: true });
+    const child = (0, import_child_process.spawn)(cliPath, args, { windowsHide: true });
     const stdoutChunks = [];
     const stderrChunks = [];
     let settled = false;
@@ -238,15 +238,15 @@ function tryParseJson(text) {
   }
   return void 0;
 }
-async function execCliText(cliPath2, args, opts = {}) {
-  const r = await execCli(cliPath2, args, opts);
+async function execCliText(cliPath, args, opts = {}) {
+  const r = await execCli(cliPath, args, opts);
   if (looksLikeError(r)) {
     throw toCliError(r);
   }
   return r.stdout;
 }
-async function execCliJson(cliPath2, args, opts = {}) {
-  const r = await execCli(cliPath2, args, opts);
+async function execCliJson(cliPath, args, opts = {}) {
+  const r = await execCli(cliPath, args, opts);
   if (looksLikeError(r)) {
     throw toCliError(r);
   }
@@ -269,12 +269,12 @@ function friendlyResult(stdout) {
   }
   return stdout.split(/\r?\n/).filter(Boolean).join("\n");
 }
-async function listDevices(cliPath2) {
-  const env = await execCliJson(cliPath2, ["device", "list"]);
+async function listDevices(cliPath) {
+  const env = await execCliJson(cliPath, ["device", "list"]);
   return env.data?.devices ?? [];
 }
-async function getDeviceStatus(cliPath2) {
-  const env = await execCliJson(cliPath2, ["device", "status"]);
+async function getDeviceStatus(cliPath) {
+  const env = await execCliJson(cliPath, ["device", "status"]);
   const raw = env.data?.connected_devices ?? env.data?.connections ?? [];
   const list = [];
   for (const c of raw) {
@@ -287,33 +287,33 @@ async function getDeviceStatus(cliPath2) {
   }
   return list;
 }
-async function listCloudPCs(cliPath2) {
-  const env = await execCliJson(cliPath2, ["cloudpc", "list"]);
+async function listCloudPCs(cliPath) {
+  const env = await execCliJson(cliPath, ["cloudpc", "list"]);
   return env.data?.cloudPCs ?? [];
 }
-async function getUserInfo(cliPath2) {
-  const env = await execCliJson(cliPath2, ["user", "info"]);
+async function getUserInfo(cliPath) {
+  const env = await execCliJson(cliPath, ["user", "info"]);
   if (!env.data?.userId) {
     throw new CliError("\u672A\u83B7\u53D6\u5230\u7528\u6237\u4FE1\u606F,\u53EF\u80FD\u5C1A\u672A\u767B\u5F55 UU\u8FDC\u7A0B\u4E3B\u5E94\u7528\u3002");
   }
   return env.data;
 }
-async function getWallet(cliPath2) {
-  const env = await execCliJson(cliPath2, ["user", "wallet"]);
+async function getWallet(cliPath) {
+  const env = await execCliJson(cliPath, ["user", "wallet"]);
   return env.data ?? { coinBalance: 0 };
 }
-async function getVersion(cliPath2) {
-  return execCliText(cliPath2, ["--version"]);
+async function getVersion(cliPath) {
+  return execCliText(cliPath, ["--version"]);
 }
-async function getLocalDeviceId(cliPath2) {
+async function getLocalDeviceId(cliPath) {
   try {
-    const id = await execCliText(cliPath2, ["-d"]);
+    const id = await execCliText(cliPath, ["-d"]);
     if (id.trim()) {
       return id.trim();
     }
   } catch (e) {
     if (e instanceof CliError && /unknown option|unexpected argument/i.test(`${e.message} ${e.stderr}`)) {
-      const env = await execCliJson(cliPath2, ["assist", "id"]);
+      const env = await execCliJson(cliPath, ["assist", "id"]);
       const id = env.data?.deviceId;
       if (id && id.trim()) {
         return id.trim();
@@ -323,12 +323,12 @@ async function getLocalDeviceId(cliPath2) {
   }
   throw new CliError("\u672A\u80FD\u83B7\u53D6\u672C\u673A\u8BBE\u5907 ID");
 }
-async function resetCustomCode(cliPath2, code) {
-  const r = await execCli(cliPath2, ["--reset-custom-code", code]);
+async function resetCustomCode(cliPath, code) {
+  const r = await execCli(cliPath, ["--reset-custom-code", code]);
   if (looksLikeError(r)) {
     const err = firstErrorLine(r) + r.stderr;
     if (/unknown option|unexpected argument/i.test(err)) {
-      const r2 = await execCli(cliPath2, ["assist", "set-code", code]);
+      const r2 = await execCli(cliPath, ["assist", "set-code", code]);
       if (looksLikeError(r2)) {
         return Promise.reject(toCliError(r2));
       }
@@ -338,16 +338,16 @@ async function resetCustomCode(cliPath2, code) {
   }
   return friendlyResult(r.stdout);
 }
-async function setBitrateLimit(cliPath2, mbps) {
-  const r = await execCli(cliPath2, ["--set-bitrate-limit", String(mbps)]);
+async function setBitrateLimit(cliPath, mbps) {
+  const r = await execCli(cliPath, ["--set-bitrate-limit", String(mbps)]);
   return looksLikeError(r) ? Promise.reject(toCliError(r)) : friendlyResult(r.stdout);
 }
-async function setLitePunch(cliPath2, disabled) {
-  const r = await execCli(cliPath2, ["--disable-lite-punch", disabled ? "true" : "false"]);
+async function setLitePunch(cliPath, disabled) {
+  const r = await execCli(cliPath, ["--disable-lite-punch", disabled ? "true" : "false"]);
   return looksLikeError(r) ? Promise.reject(toCliError(r)) : friendlyResult(r.stdout);
 }
-async function echo(cliPath2, message) {
-  const text = await execCliText(cliPath2, ["echo", message]);
+async function echo(cliPath, message) {
+  const text = await execCliText(cliPath, ["echo", message]);
   const obj = tryParseJson(text);
   if (obj && typeof obj === "object") {
     const msg = obj.data?.message;
@@ -379,8 +379,8 @@ function parseLtermLs(text) {
   }
   return sessions;
 }
-async function listLtermSessions(cliPath2) {
-  const text = await execCliText(cliPath2, ["lterm", "ls"]);
+async function listLtermSessions(cliPath) {
+  const text = await execCliText(cliPath, ["lterm", "ls"]);
   const fromTsv = parseLtermLs(text);
   if (fromTsv.length > 0 || /^NAME\b/.test(text.trim())) {
     return fromTsv;
@@ -447,14 +447,14 @@ function platformName(platform) {
   const name = known[platform.toLowerCase()];
   return name ?? platform;
 }
-function launchMainApp(cliPath2) {
+function launchMainApp(cliPath) {
   if (process.platform === "win32") {
-    const installDir = (0, import_path.dirname)((0, import_path.dirname)(cliPath2));
+    const installDir = (0, import_path.dirname)((0, import_path.dirname)(cliPath));
     const exe = [(0, import_path.join)(installDir, "GameViewer.exe"), (0, import_path.join)(installDir, "uuyc.exe")].find((p) => (0, import_fs.existsSync)(p));
     return exe ? { command: exe, args: [] } : void 0;
   }
   if (process.platform === "darwin") {
-    const macDir = (0, import_path.dirname)(cliPath2);
+    const macDir = (0, import_path.dirname)(cliPath);
     const contentsDir = (0, import_path.dirname)(macDir);
     const appBundle = (0, import_path.dirname)(contentsDir);
     if (appBundle.endsWith(".app") && (0, import_fs.existsSync)(appBundle)) {
@@ -506,6 +506,79 @@ var init_cli = __esm({
 // main.ts
 init_cli();
 
+// doctor.ts
+init_cli();
+var EXIT_CODE_HINTS = {
+  0: "\u6210\u529F",
+  1: "\u914D\u7F6E\u6587\u4EF6\u8BFB\u53D6\u9519\u8BEF",
+  2: "\u65E0\u6CD5\u8FDE\u63A5 UU\u8FDC\u7A0B\u4E3B\u7A0B\u5E8F(\u5BA2\u6237\u7AEF\u672A\u6253\u5F00\u6216\u672A\u767B\u5F55)",
+  3: "\u8F93\u5165\u65E0\u6548\u547D\u4EE4/\u53C2\u6570\u9519\u8BEF",
+  4: "\u8BF7\u6C42\u6570\u636E\u4E0D\u53EF\u7528\u3001\u8BBE\u5907\u4E0D\u5B58\u5728",
+  5: "\u63A5\u53E3\u6267\u884C\u8D85\u65F6",
+  6: "\u8FDC\u7A0B\u7EC8\u7AEF\u5185\u90E8\u6267\u884C\u5931\u8D25",
+  99: "\u672A\u77E5\u5F02\u5E38\u9519\u8BEF"
+};
+function hintForExitCode(code) {
+  return EXIT_CODE_HINTS[code] ?? `\u672A\u77E5\u9000\u51FA\u7801(${code})`;
+}
+var TERM_MIN_VERSION = "4.39.0";
+function meetsTermMinVersion(version) {
+  const m = version.match(/(\d+)\.(\d+)/);
+  if (!m) {
+    return void 0;
+  }
+  const major = Number(m[1]);
+  const minor = Number(m[2]);
+  const [minMajor, minMinor] = TERM_MIN_VERSION.split(".").map(Number);
+  return major > minMajor || major === minMajor && minor >= minMinor;
+}
+async function runDoctor(configured) {
+  const out = (line) => console.log(line);
+  let cliPath;
+  try {
+    cliPath = await resolveCliPath(configured);
+  } catch (e) {
+    out("CLI_FOUND=False");
+    out(`HINT=${e instanceof Error ? e.message : String(e)}`);
+    return 1;
+  }
+  out("CLI_FOUND=True");
+  out(`CLI_PATH=${cliPath}`);
+  const ver = await execCli(cliPath, ["version"], { timeoutMs: 8e3 });
+  const version = ver.stdout.split(/\r?\n/)[0]?.trim() ?? "";
+  out(`CLI_VERSION=${version || "(\u672A\u77E5)"}`);
+  const minOk = version ? meetsTermMinVersion(version) : void 0;
+  out(`TERM_MIN_VERSION=${TERM_MIN_VERSION}`);
+  out(`TERM_VERSION_OK=${minOk === void 0 ? "UNKNOWN" : minOk}`);
+  const echo2 = await execCli(cliPath, ["echo", "uu-doctor"], { timeoutMs: 8e3 });
+  out(`MAIN_APP_OK=${echo2.code === 0}`);
+  if (echo2.code !== 0) {
+    out(`MAIN_APP_EXIT_CODE=${echo2.code}`);
+    out(`HINT=${hintForExitCode(echo2.code)}`);
+    if (minOk === false) {
+      out("HINT_UPGRADE=\u4E3B\u63A7\u7AEF\u7248\u672C\u4F4E\u4E8E V4.39.0,\u7EC8\u7AEF\u529F\u80FD\u4E0D\u53EF\u7528;\u8BF7\u5347\u7EA7\u5230\u4E0E\u88AB\u63A7\u7AEF\u76F8\u540C\u6216\u66F4\u65B0\u7248\u672C");
+    }
+    return 2;
+  }
+  try {
+    const devices = await listDevices(cliPath);
+    const online = devices.filter((d) => d.isOnline);
+    out(`DEVICE_COUNT=${devices.length}`);
+    out(`DEVICE_ONLINE_COUNT=${online.length}`);
+    for (const d of devices) {
+      out(`DEVICE=${d.deviceId}	${d.deviceName}	online=${d.isOnline}	platform=${d.platform}`);
+    }
+    if (online.length === 0) {
+      out("HINT=\u6CA1\u6709\u5728\u7EBF\u8BBE\u5907,exec/read/write \u65E0\u6CD5\u6267\u884C");
+    }
+  } catch (e) {
+    out("DEVICE_LIST_OK=False");
+    out(`HINT=${e instanceof Error ? e.message : String(e)}`);
+  }
+  out("SESSIONS=\u7528 sessions <device_id> \u67E5\u770B(\u4F1A\u89E6\u78B0 term \u72EC\u5360\u901A\u9053,\u786E\u8BA4\u65E0\u4EBA\u5360\u7528\u518D\u6267\u884C)");
+  return 0;
+}
+
 // termBridge.ts
 var import_child_process3 = require("child_process");
 
@@ -521,9 +594,9 @@ function unknownFeatures() {
     ltermLsJson: false
   };
 }
-function runCli(cliPath2, args, timeoutMs = 5e3) {
+function runCli(cliPath, args, timeoutMs = 5e3) {
   return new Promise((resolve) => {
-    const child = (0, import_child_process2.execFile)(cliPath2, args, { timeout: timeoutMs, windowsHide: true }, (err, stdout, stderr) => {
+    const child = (0, import_child_process2.execFile)(cliPath, args, { timeout: timeoutMs, windowsHide: true }, (err, stdout, stderr) => {
       if (err) {
         resolve(`${stdout}
 ${stderr}`);
@@ -543,24 +616,24 @@ function isUnsupportedArgs(out) {
 }
 var cachedPath;
 var cachedFeatures;
-async function probeCliFeatures(cliPath2) {
-  if (cachedPath === cliPath2 && cachedFeatures) {
+async function probeCliFeatures(cliPath) {
+  if (cachedPath === cliPath && cachedFeatures) {
     return cachedFeatures;
   }
-  cachedPath = cliPath2;
+  cachedPath = cliPath;
   try {
-    return await doProbe(cliPath2);
+    return await doProbe(cliPath);
   } catch {
     cachedFeatures = unknownFeatures();
     return cachedFeatures;
   }
 }
-async function doProbe(cliPath2) {
+async function doProbe(cliPath) {
   const [rootHelp, termHelp, termOpenHelp, inputDiagHelp] = await Promise.all([
-    runCli(cliPath2, ["--help"]),
-    runCli(cliPath2, ["term", "--help"]),
-    runCli(cliPath2, ["term", "open", "--help"]),
-    runCli(cliPath2, ["input-diag", "--help"])
+    runCli(cliPath, ["--help"]),
+    runCli(cliPath, ["term", "--help"]),
+    runCli(cliPath, ["term", "open", "--help"]),
+    runCli(cliPath, ["input-diag", "--help"])
   ]);
   const init = {
     termChannel: hasMarker(`${termHelp}
@@ -575,15 +648,15 @@ ${termOpenHelp}`, ["--device-id", "--new-session", "--list-sessions", "--shell"]
     ltermLsJson: false
     // 由运行时探测确认(见 listLtermSessions 双解析)
   };
-  init.dashD = await isSupportedFlag(cliPath2);
+  init.dashD = await isSupportedFlag(cliPath);
   if (!init.inputDiag && /input-diag|输入诊断/i.test(inputDiagHelp) && !isUnsupportedArgs(inputDiagHelp) && !/^USAGE: uuyc-cli status/m.test(inputDiagHelp.trim())) {
     init.inputDiag = true;
   }
   cachedFeatures = init;
   return init;
 }
-async function isSupportedFlag(cliPath2) {
-  const out = await runCli(cliPath2, ["-d"], 3e3);
+async function isSupportedFlag(cliPath) {
+  const out = await runCli(cliPath, ["-d"], 3e3);
   return !isUnsupportedArgs(out) && out.trim().length > 0 && !/^error:/i.test(out.trim());
 }
 
@@ -847,8 +920,8 @@ function b64ShapeValid(rows, count) {
   return rows.length === 0 || rows[rows.length - 1].length <= 76;
 }
 var TermBridge = class {
-  constructor(cliPath2, deviceId, shell = "powershell", onStderr) {
-    this.cliPath = cliPath2;
+  constructor(cliPath, deviceId, shell = "powershell", onStderr) {
+    this.cliPath = cliPath;
     this.deviceId = deviceId;
     this.shell = shell;
     this.onStderr = onStderr;
@@ -1269,8 +1342,7 @@ var TermBridge = class {
 };
 
 // main.ts
-var DEFAULT_CLI = "C:\\Program Files\\Netease\\GameViewer\\bin\\uuyc-cli.exe";
-var cliPath = () => process.env["UU_CLI_PATH"] || DEFAULT_CLI;
+var resolveCli = () => resolveCliPath(process.env["UU_CLI_PATH"]);
 function parseArgs(argv) {
   const shellIdx = argv.indexOf("--shell");
   let shell = "powershell";
@@ -1283,8 +1355,13 @@ function parseArgs(argv) {
 async function main() {
   const { shell, args } = parseArgs(process.argv.slice(2));
   const [cmd, ...rest] = args;
+  if (cmd === "doctor") {
+    process.exitCode = await runDoctor(process.env["UU_CLI_PATH"]);
+    return;
+  }
+  const cli = await resolveCli();
   if (cmd === "list") {
-    const devices = await listDevices(cliPath());
+    const devices = await listDevices(cli);
     for (const d of devices) {
       console.log(`${d.deviceId}	${d.deviceName}	online=${d.isOnline}	platform=${d.platform}`);
     }
@@ -1301,7 +1378,7 @@ async function main() {
   }
   if (cmd === "sessions") {
     const { execCliText: execCliText2 } = await Promise.resolve().then(() => (init_cli(), cli_exports));
-    const out = await execCliText2(cliPath(), ["term", "--device-id", deviceId, "--list-sessions"], { timeoutMs: 3e4 });
+    const out = await execCliText2(cli, ["term", "--device-id", deviceId, "--list-sessions"], { timeoutMs: 3e4 });
     console.log(out.trim() || "(no sessions)");
     return;
   }
@@ -1312,7 +1389,7 @@ async function main() {
       process.exit(2);
     }
     const { execCliText: execCliText2 } = await Promise.resolve().then(() => (init_cli(), cli_exports));
-    const out = await execCliText2(cliPath(), ["term", "--device-id", deviceId, "--kill-session", sid], { timeoutMs: 3e4 });
+    const out = await execCliText2(cli, ["term", "--device-id", deviceId, "--kill-session", sid], { timeoutMs: 3e4 });
     console.log(out.trim() || `session ${sid} killed`);
     return;
   }
@@ -1322,7 +1399,7 @@ async function main() {
       console.error("command required");
       process.exit(2);
     }
-    const bridge = new TermBridge(cliPath(), deviceId, shell);
+    const bridge = new TermBridge(cli, deviceId, shell);
     try {
       const rows = await bridge.execRows(command, { timeoutMs: 9e4 });
       console.log(rows.length > 0 ? rows.join("\n") : "(no output)");
@@ -1333,7 +1410,7 @@ async function main() {
   }
   if (cmd === "read") {
     const path = rest[1];
-    const bridge = new TermBridge(cliPath(), deviceId, shell);
+    const bridge = new TermBridge(cli, deviceId, shell);
     try {
       const rows = await bridge.readFileB64(path, 256 * 1024);
       const first = rows[0] ?? "";
@@ -1356,7 +1433,7 @@ async function main() {
     }
     const { readFileSync } = await import("fs");
     const content = readFileSync(localFile);
-    const bridge = new TermBridge(cliPath(), deviceId, shell);
+    const bridge = new TermBridge(cli, deviceId, shell);
     try {
       await bridge.writeFile(path, content);
       console.log(`written ${path} (${content.length} bytes)`);
@@ -1366,7 +1443,7 @@ async function main() {
     return;
   }
   if (cmd === "pty") {
-    const bridge = new TermBridge(cliPath(), deviceId, shell);
+    const bridge = new TermBridge(cli, deviceId, shell);
     await bridge.ensureReady();
     console.log('--- pty ready; type lines, Ctrl-D / "exit" to quit ---');
     const readline = await import("readline");
