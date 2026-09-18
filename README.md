@@ -27,7 +27,12 @@
 git clone https://github.com/youki258/uu-remote-bridge.git
 ```
 
-**前置**：本机 UU远程主程序运行且已登录；远程机装有 UU远程被控端；Node.js ≥ 20。主控/被控端实测版本：UU远程 4.38.3（CLI 1.0.0），Windows → Windows。
+**前置**（官方要求）：
+
+- UU远程 主程序**运行且已登录**，与被控端**同账号**（未运行 → 退出码 2，未登录 → 错误码 1001）
+- **主控端与被控端均为 V4.39.0 及以上**（旧版主控端不能连新版被控端）；本项目不绑定版本，能力运行时探测
+- 被控端**仅支持 Windows**；锁屏时进终端需一次系统账户验证（Windows 主控端发起需手动输入被控端系统账户密码）
+- Node.js ≥ 20
 
 作为 agent skill 使用：整个目录拷到 `%USERPROFILE%\.agents\skills\uu-remote-bridge`（Claude Code / pi / Codex 的 skill 目录），`SKILL.md` 会自动生效。
 
@@ -44,7 +49,19 @@ node bin\uu-bridge.cjs sessions <device_id>       # 会话运维
 node bin\uu-bridge.cjs kill <device_id> <session_id>
 ```
 
-## 实测性能与限制（Windows → Windows，4.38.3）
+## 版本与兼容
+
+本项目**不绑定 UU远程 版本**：`term` 通道能力运行时探测（`term --help` 是否含 `--device-id` / `--new-session` / `--list-sessions` / `--shell`），升级后无需改配置。升级后先跑 `node bin\uu-bridge.cjs doctor`。
+
+| 能力 | 实测版本 | 证据 | 状态 |
+|---|---|---|---|
+| 管理面（`list` / `device list` / `echo` / `version` / `-d` / 能力探测） | 4.41.0.2311 | 2026-09-18 本机 `list` → 退出码 0 | ✅ |
+| term 管道通道（`exec` / `read` / `write` / `pty`） | 4.39.2 | `TEST-REPORT.md` 38 项验收（2026-09-09 ~ 09-10） | ✅ |
+| term 管道通道 | 4.41.0.2311 | — | 🔶 待复测 |
+
+低于 V4.39.0 的主控端不能连接，且旧版 CLI 的 `term` 只有 `open/exit`、没有本项目依赖的管道通道。未列出的版本不等于不支持，先跑 `doctor` 再动手。
+
+## 实测性能与限制（Windows → Windows）
 
 | 项 | 实测值 |
 |---|---|
@@ -55,8 +72,21 @@ node bin\uu-bridge.cjs kill <device_id> <session_id>
 | write 上限 | 512KB |
 
 - `exec/read/write` 仅支持 `--shell powershell`；cmd/zsh 会话请用 `pty`
-- 更大文件请走 UU远程 图形界面文件传输，传完用 `exec` 核对 SHA256
-- 协议行为与 UU远程 版本强相关，其他版本未验证
+- 更大文件请走 UU远程 图形界面文件传输，传完用 `exec` 核对 SHA256（官方「端口映射」虽是 GUI 能力、可用于映射远端 TCP 服务，但明确「关闭端口映射面板后映射不会继续」，不适合无人值守，故未纳入本工具）
+- 版本兼容与升级排查见下文「版本与兼容」「升级 UU远程 后 CLI 不工作？」
+
+## 升级 UU远程 后 CLI 不工作？
+
+先跑只读体检 `node bin\uu-bridge.cjs doctor`（或 `pwsh -File scripts\uu-doctor.ps1`），再对照下表。
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| 退出码 2 / 错误码 1002 | 主程序未运行（官方：除 `version` 外所有命令都要求客户端后台运行） | 打开 UU远程 并保持后台运行 |
+| 错误码 1001 | 未登录 | 在客户端登录账号 |
+| 错误码 1003 /「主控端版本过低」 | 主控端与被控端版本不匹配（旧版主控端不能连新版被控端） | 把**较低的那一端**升级到 ≥ V4.39.0，且主控端不低于被控端 |
+| `无法启动 CLI` / `ENOENT` | CLI 不在默认安装目录（官方：CLI 位于安装目录 `bin` 下，默认不在 PATH） | 本项目已内置多盘符 / `LOCALAPPDATA` / PATH 探测；仍失败则设环境变量 `UU_CLI_PATH=<完整路径>` |
+| 「远程终端会话无法就绪」 | 被控端离线 / 被控端锁屏待系统账户验证 / 通道被他人占用 | `list` 确认在线；锁屏时先完成系统账户验证；出现 `attached from another window` **立即停手等待**，绝不抢占 |
+| 「当前 uuyc-cli 版本不支持远程终端管道通道」 | 本机 CLI 太旧（`term` 只有 `open/exit`） | 升级 UU远程 主程序 |
 
 ## 推 `.bat` 注意
 
@@ -66,6 +96,16 @@ node bin\uu-bridge.cjs kill <device_id> <session_id>
 $t = [IO.File]::ReadAllText('.\run.bat'); [IO.File]::WriteAllText('.\run-gbk.bat', ($t -replace "`r`n","`n" -replace "`n","`r`n"), [Text.Encoding]::GetEncoding(936))
 ```
 
+## 官方文档
+
+| 主题 | 链接 |
+|---|---|
+| CLI 命令行教程（退出码表、命令清单、主程序常驻要求） | https://uuyc.163.com/blog/20260625-cli.html |
+| 终端功能说明（版本门槛、平台限制、同账号、锁屏验证） | https://uuyc.163.com/help/20260509/40220_1299599.html |
+| 端口映射说明（GUI 能力，非 CLI） | https://uuyc.163.com/help/20260423/40220_1297526.html |
+
+> 本地全文存档见 `vendor/official-docs/`（该目录被 `.gitignore` 忽略，不进 Git），其中 `INDEX.md` 提炼了与本项目直接相关的硬约束与待验未知项。
+
 ## 致谢与来源
 
 - [song-chaoyang/uu-remote-vscode](https://github.com/song-chaoyang/uu-remote-vscode)（MIT）——本项目的 TermBridge/VT 屏幕解析核心由此提取
@@ -74,7 +114,7 @@ $t = [IO.File]::ReadAllText('.\run.bat'); [IO.File]::WriteAllText('.\run-gbk.bat
 
 ## 免责声明
 
-非官方项目，与网易无关联。`uuyc-cli` 为 UU远程 官方随主程序发布的命令行工具，本项目仅做本地进程编排。请只对你有授权的设备执行操作。协议行为随 UU远程 版本变化，使用前建议先跑 `exec <device_id> "hostname"` 验证链路。
+非官方项目，与网易无关联。`uuyc-cli` 为 UU远程 官方随主程序发布的命令行工具，本项目仅做本地进程编排。请只对你有授权的设备执行操作。协议行为随 UU远程 版本变化，升级后建议先跑 `node bin\uu-bridge.cjs doctor` 只读体检，再用 `exec <device_id> "hostname"` 验证链路。
 
 ## License
 
