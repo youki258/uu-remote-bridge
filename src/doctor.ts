@@ -8,9 +8,10 @@
  * 官方要求(https://uuyc.163.com/help/20260509/40220_1299599.html):
  * - 终端功能要求主控端与被控端均为 V4.39.0 及以上
  *
- * 只读约束:不创建会话、不 kill 会话、不列出会话(不触碰 term 独占通道)。
+ * 默认只读约束:不创建会话、不 kill 会话；设备级探针仅按需列出现有会话，不触碰会话内容。
  */
-import { execCli, listDevices, platformName, resolveCliPath } from './cli';
+import { execCli, listDevices, looksLikeError, platformName, resolveCliPath } from './cli';
+import { probeCliFeatures } from './capabilities';
 
 /** 官方退出码 → 可读原因 */
 export const EXIT_CODE_HINTS: Record<number, string> = {
@@ -31,6 +32,50 @@ export function hintForExitCode(code: number): string {
 /** 终端功能官方要求的最低版本(主控端与被控端均为该版本及以上) */
 export const TERM_MIN_VERSION = '4.39.0';
 
+export type TermDiagnosticStatus =
+  | 'NEEDS_ACTIVATION_OR_VERSION_MISMATCH'
+  | 'LOCKED'
+  | 'BUSY'
+  | 'UNAVAILABLE'
+  | 'UNSUPPORTED_CLI'
+  | 'UNKNOWN';
+
+export interface TermDiagnostic {
+  status: TermDiagnosticStatus;
+  hint?: string;
+}
+
+/**
+ * 将 uuyc-cli 的终端错误归一为可执行的排障提示。
+ * 该函数只分析文本，不执行任何远程操作，供 doctor 和 TermBridge 共用。
+ */
+export function classifyTermDiagnostic(text: string): TermDiagnostic {
+  const normalized = text.trim();
+  if (/锁屏|账户密码|系统账户验证|screen.*lock|password/i.test(normalized)) {
+    return { status: 'LOCKED', hint: '请先完成被控端系统账户验证' };
+  }
+  if (/attached from another window|已被其他窗口|会话.*占用|already exists/i.test(normalized)) {
+    return { status: 'BUSY', hint: '当前终端已被其他窗口占用，请等待后重试' };
+  }
+  if (/不支持远程终端管道|不支持.*管道|unknown option.*device-id|term.*unsupported/i.test(normalized)) {
+    return { status: 'UNSUPPORTED_CLI', hint: '请升级 UU远程主程序' };
+  }
+  if (/设备离线|无法连接.*设备|设备不存在|主程序.*未运行|未登录|device.*offline|not found/i.test(normalized)) {
+    return { status: 'UNAVAILABLE', hint: '请确认设备在线且 UU远程主程序已登录' };
+  }
+  if (/版本过低|版本不匹配|不再兼容|协议版本|通道.*未激活|terminal.*not.*active|open.*terminal/i.test(normalized)) {
+    return {
+      status: 'NEEDS_ACTIVATION_OR_VERSION_MISMATCH',
+      hint: '请先在 UU远程主程序中打开该设备的终端窗口；仍失败时检查主控端与被控端版本',
+    };
+  }
+  return { status: 'UNKNOWN' };
+}
+
+function diagnosticText(result: TermDiagnostic): string {
+  return result.hint ? `${result.status};${result.hint}` : result.status;
+}
+
 /** 版本号是否满足终端最低要求;无法解析时返回 undefined */
 export function meetsTermMinVersion(version: string): boolean | undefined {
   const m = version.match(/(\d+)\.(\d+)/);
@@ -47,7 +92,7 @@ export function meetsTermMinVersion(version: string): boolean | undefined {
  * 执行只读预检并打印结构化 NAME=VALUE 行。
  * @returns 0 正常 / 1 找不到 CLI / 2 主程序不可达
  */
-export async function runDoctor(configured?: string): Promise<number> {
+export async function runDoctor(configured?: string, deviceId?: string): Promise<number> {
   const out = (line: string) => console.log(line);
 
   let cliPath: string;
@@ -96,6 +141,32 @@ export async function runDoctor(configured?: string): Promise<number> {
     out(`HINT=${e instanceof Error ? e.message : String(e)}`);
   }
 
-  out('SESSIONS=用 sessions <device_id> 查看(会触碰 term 独占通道,确认无人占用再执行)');
+  if (deviceId) {
+    const features = await probeCliFeatures(cliPath);
+    if (!features.termChannel) {
+      out('TERM_PROBE_OK=False');
+      out('TERM_CHANNEL_STATUS=UNSUPPORTED_CLI');
+      out('TERM_HINT=当前 uuyc-cli 不支持远程终端管道,请升级 UU远程主程序');
+      return 0;
+    }
+
+    const probe = await execCli(cliPath, ['term', '--device-id', deviceId, '--list-sessions'], { timeoutMs: 30_000 });
+    const detail = [probe.stderr, probe.stdout].filter(Boolean).join('\n');
+    if (!looksLikeError(probe)) {
+      out('TERM_PROBE_OK=True');
+      out('TERM_CHANNEL_STATUS=READY');
+      out('TERM_SESSIONS=已读取(未创建或终止会话)');
+    } else {
+      const diagnostic = classifyTermDiagnostic(detail || `退出码 ${probe.code}`);
+      out('TERM_PROBE_OK=False');
+      out(`TERM_CHANNEL_STATUS=${diagnostic.status}`);
+      if (detail) {
+        out(`TERM_ERROR=${detail.replace(/[\r\n]+/g, ';').slice(0, 300)}`);
+      }
+      out(`TERM_HINT=${diagnosticText(diagnostic)}`);
+    }
+  } else {
+    out('SESSIONS=用 doctor <device_id> 探测终端通道；sessions <device_id> 会触碰 term 独占通道,确认无人占用再执行');
+  }
   return 0;
 }

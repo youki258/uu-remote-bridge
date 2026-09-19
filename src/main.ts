@@ -3,7 +3,7 @@
  * Reuses TermBridge from song-chaoyang/uu-remote-vscode (MIT-style reuse for local automation).
  *
  * Usage:
- *   node uu-bridge.cjs doctor                      (只读预检:CLI/主程序/版本/设备在线)
+ *   node uu-bridge.cjs doctor [device_id]          (只读预检;带设备 ID 时探测终端通道)
  *   node uu-bridge.cjs list
  *   node uu-bridge.cjs exec  <device_id> "<command>" [--shell powershell|cmd|zsh|bash]
  *   node uu-bridge.cjs read  <device_id> <remote_path>
@@ -35,7 +35,7 @@ async function main() {
   const [cmd, ...rest] = args;
 
   if (cmd === 'doctor') {
-    process.exitCode = await runDoctor(process.env['UU_CLI_PATH']);
+    process.exitCode = await runDoctor(process.env['UU_CLI_PATH'], rest[0]);
     return;
   }
 

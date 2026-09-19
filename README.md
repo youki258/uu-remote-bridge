@@ -11,6 +11,7 @@ git clone https://github.com/youki258/uu-remote-bridge.git
 cd uu-remote-bridge
 node bin\uu-bridge.cjs doctor                        # 只读体检：CLI / 版本 / 在线 / 兼容
 node bin\uu-bridge.cjs list                          # 拿 device_id
+node bin\uu-bridge.cjs doctor <device_id>            # 只读探测该设备的终端通道
 node bin\uu-bridge.cjs exec <device_id> "hostname"
 ```
 
@@ -35,9 +36,11 @@ node bin\uu-bridge.cjs exec <device_id> "hostname"
 | `pty <device_id>` | 交互模式：stdin 每行 → 远程屏幕快照（ssh 密码、y/n 确认等） |
 | `sessions` / `kill` | 会话列表 / 清理残留 |
 
+`doctor <device_id>` 只调用 `term --list-sessions` 探测通道，不创建或终止会话，也不会抢占其他窗口。探针会区分通道已就绪、需要先在 UU 远程 GUI 打开终端、版本不兼容、锁屏、被其他窗口占用、设备不可用和旧版 CLI。
+
 ## 故障排查
 
-先跑 `node bin\uu-bridge.cjs doctor`，再对照：
+先跑 `node bin\uu-bridge.cjs doctor`；已知设备 ID 时再跑 `node bin\uu-bridge.cjs doctor <device_id>`，然后对照：
 
 | 现象 | 处置 |
 |---|---|
