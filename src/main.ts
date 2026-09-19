@@ -12,7 +12,7 @@
  *
  * CLI 路径可用环境变量 UU_CLI_PATH 指定;否则自动探测常见安装位置。
  */
-import { listDevices, resolveCliPath } from './cli';
+import { listDevices, resolveCliPath, platformName } from './cli';
 import { runDoctor } from './doctor';
 import { TermBridge } from './termBridge';
 import type { ShellKind } from './types';
@@ -44,7 +44,7 @@ async function main() {
   if (cmd === 'list') {
     const devices = await listDevices(cli);
     for (const d of devices) {
-      console.log(`${d.deviceId}\t${d.deviceName}\tonline=${d.isOnline}\tplatform=${d.platform}`);
+      console.log(`${d.deviceId}\t${d.deviceName}\tonline=${d.isOnline}\tplatform=${platformName(d.platform) || d.platform}`);
     }
     return;
   }

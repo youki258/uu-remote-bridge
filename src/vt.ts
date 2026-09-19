@@ -1,16 +1,21 @@
 /**
  * 简化 ANSI/VT 屏幕模拟器。
  *
- * uuyc-cli term 通道的实测行为(v4.39.2):
- * - CLI 在服务端维护一个 24 行的虚拟屏幕,stdout 发送的是屏幕渲染事件流
- *   (光标定位 CSI H + 文本、清屏 CSI 2J、清行 CSI K、SGR 颜色等)
- * - 输出超过屏幕高度会被服务端丢弃(滚出屏幕的行不会再下发)
- * - 超长行不会被按 80 列折行(2000 字符单行完整保留)
+ * uuyc-cli term 通道的实测行为(4.41.0.2311,2026-09-19 逆推,详见 PROTOCOL.md):
+ * - 服务端虚拟屏为 **39 行 × 120 列**（二分实测：k=37 全在 / k=38 首行即丢；`ESC[8;30;120t`）
+ * - 超长行按 120 列**自动折行**（服务端依赖终端 autowrap），因此模型必须实现折行与滚动逐出，
+ *   否则宽行内容会被拼进同一“行”（旧实现实测 maxRowLen=4450）
+ * - 输出超过屏幕高度会被服务端丢弃(滚出屏幕的行不会再下发) → 必须分页读取
  * - 交互输入会触发一次 2J + 全屏重绘
  * - 连接日志([连接] ...)走 stderr,stdout 只有终端数据
  *
  * 因此解析 term 输出必须以"屏幕快照"为单位,而非简单行流。
  */
+
+/** 服务端虚拟屏几何（2026-09-19 实测逆推：PROTOCOL.md §1）——二分实测容量 39 行；
+ * `ESC[8;30;120t` 与「118 列不折 / 121 列折」定出 120 列。 */
+export const VIEWPORT_ROWS = 39;
+export const VIEWPORT_COLS = 120;
 
 /** 从文本中剔除 ANSI 转义序列(CSI + OSC + 单字符转义) */
 export function stripAnsiSequences(s: string): string {
@@ -19,10 +24,13 @@ export function stripAnsiSequences(s: string): string {
 }
 
 export class VtScreen {
-  private rows = new Map<number, string>();
+  /** 视口行（index 0 = 屏上第 1 行），长度恒 ≤ VIEWPORT_ROWS，溢出时从顶部逐出 */
+  private rows: string[] = [];
   private cursorRow = 1;
   private cursorCol = 1;
   private pending = '';
+  /** 自上次 reset() 后被写过的行（脏行跟踪，用于区分「本命令输出」与「残留」） */
+  private dirty = new Set<number>();
 
   /** 喂入原始字节流(可分多次;转义序列跨 chunk 也安全,残留在 pending 中) */
   feed(chunk: string): void {
@@ -45,9 +53,8 @@ export class VtScreen {
       if (ch === '\r') {
         this.cursorCol = 1;
       } else if (ch === '\n') {
-        this.cursorRow++;
-        // CLI 输出里 \n 后列归 1 是安全的简化(定位均靠 CSI H)
         this.cursorCol = 1;
+        this.lineFeed();
       } else if (ch !== '\u0007' && ch !== '\u0000') {
         this.writeChar(ch);
       }
@@ -55,18 +62,48 @@ export class VtScreen {
     }
   }
 
-  private writeChar(ch: string): void {
-    const row = this.getRow(this.cursorRow);
-    const col = this.cursorCol; // 1-based
-    const before = row.substring(0, col - 1);
-    const after = row.length >= col ? row.substring(col) : '';
-    const padded = before.padEnd(col - 1, ' ');
-    this.rows.set(this.cursorRow, padded + ch + after);
-    this.cursorCol++;
+  private getRow(r: number): string {
+    return this.rows[r - 1] ?? '';
   }
 
-  private getRow(r: number): string {
-    return this.rows.get(r) ?? '';
+  private setRow(r: number, value: string): void {
+    while (this.rows.length < r) {
+      this.rows.push('');
+    }
+    this.rows[r - 1] = value;
+    this.dirty.add(r);
+  }
+
+  /** 光标下移一行；超出视口底部时整屏上移并从顶部逐出（真终端的滚动语义） */
+  private lineFeed(): void {
+    this.cursorRow++;
+    if (this.cursorRow > VIEWPORT_ROWS) {
+      this.rows.shift();
+      this.rows.push('');
+      this.cursorRow = VIEWPORT_ROWS;
+      // 逐出后行号整体上移，脏标记需同步左移
+      const moved = new Set<number>();
+      for (const d of this.dirty) {
+        if (d > 1) {
+          moved.add(d - 1);
+        }
+      }
+      this.dirty = moved;
+    }
+  }
+
+  private writeChar(ch: string): void {
+    // 自动折行：到达 120 列后再写字符 → 换到下一行第 1 列（服务端依赖终端 autowrap）
+    if (this.cursorCol > VIEWPORT_COLS) {
+      this.cursorCol = 1;
+      this.lineFeed();
+    }
+    const col = this.cursorCol;
+    const row = this.getRow(this.cursorRow);
+    const before = row.substring(0, col - 1).padEnd(col - 1, ' ');
+    const after = row.length >= col ? row.substring(col) : '';
+    this.setRow(this.cursorRow, before + ch + after);
+    this.cursorCol++;
   }
 
   private applyEscape(seq: string): void {
@@ -77,28 +114,28 @@ export class VtScreen {
     const body = seq.slice(2, -1); // 去掉 ESC [ 与 final
     const final = seq[seq.length - 1];
     const params = body.replace(/^\?/, '');
+    const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+    const arg = (s: string | undefined, dflt = 1) => parseInt(s || String(dflt), 10) || dflt;
     switch (final) {
       case 'H':
       case 'f': {
         const [r, c] = params.split(';');
-        this.cursorRow = Math.max(1, parseInt(r || '1', 10) || 1);
-        this.cursorCol = Math.max(1, parseInt(c || '1', 10) || 1);
+        this.cursorRow = clamp(arg(r, 1), 1, VIEWPORT_ROWS);
+        this.cursorCol = clamp(arg(c, 1), 1, VIEWPORT_COLS + 1); // +1：允许停在待折行位
         break;
       }
       case 'J': {
         const mode = params || '0';
         if (mode === '2' || mode === '3') {
-          this.rows.clear();
+          this.rows = [];
+          this.dirty.clear();
           this.cursorRow = 1;
           this.cursorCol = 1;
         } else if (mode === '0') {
-          // 光标到屏幕末尾清除:简化为清空当前行光标之后 + 其余行
-          const row = this.getRow(this.cursorRow);
-          this.rows.set(this.cursorRow, row.substring(0, this.cursorCol - 1));
-          for (const k of [...this.rows.keys()]) {
-            if (k > this.cursorRow) {
-              this.rows.delete(k);
-            }
+          // 光标到屏幕末尾清除：当前行光标之后 + 其余行
+          this.setRow(this.cursorRow, this.getRow(this.cursorRow).substring(0, this.cursorCol - 1));
+          for (let r = this.cursorRow + 1; r <= this.rows.length; r++) {
+            this.setRow(r, '');
           }
         }
         break;
@@ -107,34 +144,38 @@ export class VtScreen {
         const mode = params || '0';
         const row = this.getRow(this.cursorRow);
         if (mode === '0') {
-          this.rows.set(this.cursorRow, row.substring(0, this.cursorCol - 1));
+          this.setRow(this.cursorRow, row.substring(0, this.cursorCol - 1));
         } else if (mode === '1') {
-          this.rows.set(this.cursorRow, row.padEnd(this.cursorCol - 1, ' '));
+          // 仅擦除光标之前：保留尾部内容
+          const tail = row.substring(this.cursorCol - 1);
+          this.setRow(this.cursorRow, ' '.repeat(this.cursorCol - 1) + tail);
         } else {
-          this.rows.delete(this.cursorRow);
+          this.setRow(this.cursorRow, '');
         }
         break;
       }
       case 'X': {
         // ECH(CSI X): 从光标处擦除 N 个字符,光标不动
-        const n = parseInt(params || '1', 10) || 1;
+        const n = Math.min(arg(params, 1), VIEWPORT_COLS);
         const row = this.getRow(this.cursorRow);
-        const before = row.substring(0, this.cursorCol - 1);
-        const after = row.substring(this.cursorCol - 1 + n);
-        this.rows.set(this.cursorRow, before.padEnd(this.cursorCol - 1, ' ') + ' '.repeat(n) + after);
+        const start = this.cursorCol - 1;
+        const before = row.substring(0, start).padEnd(start, ' ');
+        const after = row.substring(start + n);
+        this.setRow(this.cursorRow, (before + ' '.repeat(n) + after).replace(/\s+$/, ''));
         break;
       }
       case 'A':
-        this.cursorRow = Math.max(1, this.cursorRow - (parseInt(params || '1', 10) || 1));
+        this.cursorRow = clamp(this.cursorRow - arg(params, 1), 1, VIEWPORT_ROWS);
         break;
       case 'B':
-        this.cursorRow += parseInt(params || '1', 10) || 1;
+        // 光标下移不触发滚动（真终端语义），仅限在视口内
+        this.cursorRow = clamp(this.cursorRow + arg(params, 1), 1, VIEWPORT_ROWS);
         break;
       case 'C':
-        this.cursorCol += parseInt(params || '1', 10) || 1;
+        this.cursorCol = clamp(this.cursorCol + arg(params, 1), 1, VIEWPORT_COLS + 1);
         break;
       case 'D':
-        this.cursorCol = Math.max(1, this.cursorCol - (parseInt(params || '1', 10) || 1));
+        this.cursorCol = clamp(this.cursorCol - arg(params, 1), 1, VIEWPORT_COLS);
         break;
       default:
         // SGR(m)、模式、光标样式等:忽略
@@ -142,13 +183,11 @@ export class VtScreen {
     }
   }
 
-  /** 当前屏幕快照:非空行数组(行尾空白已修剪) */
+  /** 当前屏幕快照:非空行数组(行尾空白已修剪)，最多 VIEWPORT_ROWS 行 */
   snapshotLines(): string[] {
-    const maxRow = Math.max(0, ...this.rows.keys());
     const lines: string[] = [];
-    for (let r = 1; r <= maxRow; r++) {
-      const line = (this.rows.get(r) ?? '').replace(/\s+$/, '');
-      lines.push(line);
+    for (let r = 1; r <= this.rows.length; r++) {
+      lines.push((this.rows[r - 1] ?? '').replace(/\s+$/, ''));
     }
     // 去掉末尾连续空行
     while (lines.length > 0 && lines[lines.length - 1] === '') {
@@ -157,13 +196,26 @@ export class VtScreen {
     return lines;
   }
 
+  /** 自上次 reset() 后被写过的行（行号 1-based，已按屏上顺序），用于区分本命令输出与残留 */
+  dirtyLines(): string[] {
+    return [...this.dirty]
+      .sort((a, b) => a - b)
+      .map((r) => (this.rows[r - 1] ?? '').replace(/\s+$/, ''));
+  }
+
   /** 判定屏幕是否包含某文本(忽略颜色等转义后逐行查找) */
   contains(needle: string): boolean {
     return this.snapshotLines().some((l) => l.includes(needle));
   }
 
+  /**
+   * 本地模型重置。
+   * 注意：服务端是**差分渲染**，本地模型必须与服务端保持一致；
+   * 本方法只用于「已知服务端即将全屏重绘（如 Clear-Host）」的场合。
+   */
   reset(): void {
-    this.rows.clear();
+    this.rows = [];
+    this.dirty.clear();
     this.pending = '';
     this.cursorRow = 1;
     this.cursorCol = 1;

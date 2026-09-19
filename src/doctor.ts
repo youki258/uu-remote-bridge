@@ -10,7 +10,7 @@
  *
  * 只读约束:不创建会话、不 kill 会话、不列出会话(不触碰 term 独占通道)。
  */
-import { execCli, listDevices, resolveCliPath } from './cli';
+import { execCli, listDevices, platformName, resolveCliPath } from './cli';
 
 /** 官方退出码 → 可读原因 */
 export const EXIT_CODE_HINTS: Record<number, string> = {
@@ -86,7 +86,7 @@ export async function runDoctor(configured?: string): Promise<number> {
     out(`DEVICE_COUNT=${devices.length}`);
     out(`DEVICE_ONLINE_COUNT=${online.length}`);
     for (const d of devices) {
-      out(`DEVICE=${d.deviceId}\t${d.deviceName}\tonline=${d.isOnline}\tplatform=${d.platform}`);
+      out(`DEVICE=${d.deviceId}\t${d.deviceName}\tonline=${d.isOnline}\tplatform=${platformName(d.platform) || d.platform}`);
     }
     if (online.length === 0) {
       out('HINT=没有在线设备,exec/read/write 无法执行');

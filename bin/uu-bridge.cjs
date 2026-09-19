@@ -33,7 +33,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// cli.ts
+// src/cli.ts
 var cli_exports = {};
 __export(cli_exports, {
   CLI_FILE_NAME: () => CLI_FILE_NAME,
@@ -42,6 +42,7 @@ __export(cli_exports, {
   LOCAL_SHELLS: () => LOCAL_SHELLS,
   REMOTE_SHELLS: () => REMOTE_SHELLS,
   candidateCliPaths: () => candidateCliPaths,
+  cliDiagnosis: () => cliDiagnosis,
   cloudPcStatusName: () => cloudPcStatusName,
   echo: () => echo,
   execCli: () => execCli,
@@ -133,6 +134,12 @@ async function resolveCliPath(configured) {
     '\u672A\u627E\u5230 uuyc-cli\u3002\u8BF7\u786E\u8BA4\u5DF2\u5B89\u88C5 UU\u8FDC\u7A0B\u4E3B\u7A0B\u5E8F(CLI \u4F4D\u4E8E\u5B89\u88C5\u76EE\u5F55 bin \u4E0B),\u6216\u7528\u73AF\u5883\u53D8\u91CF UU_CLI_PATH \u6307\u5B9A\u5B8C\u6574\u8DEF\u5F84(\u8BBE\u7F6E\u9879 "uu.cliPath" \u540C\u7406)\u3002'
   );
 }
+function cliDiagnosis(stderr) {
+  const noise = /^\[(连接|系统|提示)\]|^─+$|^Warning:/i;
+  const signal = /版本|不兼容|过低|失败|错误|拒绝|不存在|超时|无效|未找到|不支持|锁屏|密码|Error/i;
+  const lines = stripAnsi(stderr).split(/\r?\n/).map((l) => l.trim()).filter(Boolean).filter((l) => signal.test(l) || !noise.test(l));
+  return lines.join(";").slice(0, 200);
+}
 async function execCli(cliPath, args, opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 15e3;
   return new Promise((resolve, reject) => {
@@ -144,7 +151,8 @@ async function execCli(cliPath, args, opts = {}) {
       if (!settled) {
         child.kill();
         settled = true;
-        reject(new CliError(`\u547D\u4EE4\u8D85\u65F6(${timeoutMs}ms):${args.join(" ")}`));
+        const diag = cliDiagnosis(Buffer.concat(stderrChunks).toString("utf8"));
+        reject(new CliError(`\u547D\u4EE4\u8D85\u65F6(${timeoutMs}ms):${args.join(" ")}${diag ? ` \u2014\u2014 ${diag}` : ""}`));
       }
     }, timeoutMs);
     child.stdout?.on("data", (d) => stdoutChunks.push(d));
@@ -474,7 +482,7 @@ function cloudPcStatusName(status) {
 }
 var import_child_process, import_fs, import_path, CliError, ANSI_RE, CLI_FILE_NAME, REMOTE_SHELLS, LOCAL_SHELLS, CLOUDPC_STATUS_NAMES;
 var init_cli = __esm({
-  "cli.ts"() {
+  "src/cli.ts"() {
     import_child_process = require("child_process");
     import_fs = require("fs");
     import_path = require("path");
@@ -503,10 +511,10 @@ var init_cli = __esm({
   }
 });
 
-// main.ts
+// src/main.ts
 init_cli();
 
-// doctor.ts
+// src/doctor.ts
 init_cli();
 var EXIT_CODE_HINTS = {
   0: "\u6210\u529F",
@@ -566,7 +574,7 @@ async function runDoctor(configured) {
     out(`DEVICE_COUNT=${devices.length}`);
     out(`DEVICE_ONLINE_COUNT=${online.length}`);
     for (const d of devices) {
-      out(`DEVICE=${d.deviceId}	${d.deviceName}	online=${d.isOnline}	platform=${d.platform}`);
+      out(`DEVICE=${d.deviceId}	${d.deviceName}	online=${d.isOnline}	platform=${platformName(d.platform) || d.platform}`);
     }
     if (online.length === 0) {
       out("HINT=\u6CA1\u6709\u5728\u7EBF\u8BBE\u5907,exec/read/write \u65E0\u6CD5\u6267\u884C");
@@ -579,10 +587,10 @@ async function runDoctor(configured) {
   return 0;
 }
 
-// termBridge.ts
+// src/termBridge.ts
 var import_child_process3 = require("child_process");
 
-// capabilities.ts
+// src/capabilities.ts
 var import_child_process2 = require("child_process");
 function unknownFeatures() {
   return {
@@ -660,12 +668,17 @@ async function isSupportedFlag(cliPath) {
   return !isUnsupportedArgs(out) && out.trim().length > 0 && !/^error:/i.test(out.trim());
 }
 
-// vt.ts
+// src/vt.ts
+var VIEWPORT_ROWS = 39;
+var VIEWPORT_COLS = 120;
 var VtScreen = class {
-  rows = /* @__PURE__ */ new Map();
+  /** 视口行（index 0 = 屏上第 1 行），长度恒 ≤ VIEWPORT_ROWS，溢出时从顶部逐出 */
+  rows = [];
   cursorRow = 1;
   cursorCol = 1;
   pending = "";
+  /** 自上次 reset() 后被写过的行（脏行跟踪，用于区分「本命令输出」与「残留」） */
+  dirty = /* @__PURE__ */ new Set();
   /** 喂入原始字节流(可分多次;转义序列跨 chunk 也安全,残留在 pending 中) */
   feed(chunk) {
     let text = this.pending + chunk;
@@ -686,25 +699,51 @@ var VtScreen = class {
       if (ch === "\r") {
         this.cursorCol = 1;
       } else if (ch === "\n") {
-        this.cursorRow++;
         this.cursorCol = 1;
+        this.lineFeed();
       } else if (ch !== "\x07" && ch !== "\0") {
         this.writeChar(ch);
       }
       i++;
     }
   }
-  writeChar(ch) {
-    const row = this.getRow(this.cursorRow);
-    const col = this.cursorCol;
-    const before = row.substring(0, col - 1);
-    const after = row.length >= col ? row.substring(col) : "";
-    const padded = before.padEnd(col - 1, " ");
-    this.rows.set(this.cursorRow, padded + ch + after);
-    this.cursorCol++;
-  }
   getRow(r) {
-    return this.rows.get(r) ?? "";
+    return this.rows[r - 1] ?? "";
+  }
+  setRow(r, value) {
+    while (this.rows.length < r) {
+      this.rows.push("");
+    }
+    this.rows[r - 1] = value;
+    this.dirty.add(r);
+  }
+  /** 光标下移一行；超出视口底部时整屏上移并从顶部逐出（真终端的滚动语义） */
+  lineFeed() {
+    this.cursorRow++;
+    if (this.cursorRow > VIEWPORT_ROWS) {
+      this.rows.shift();
+      this.rows.push("");
+      this.cursorRow = VIEWPORT_ROWS;
+      const moved = /* @__PURE__ */ new Set();
+      for (const d of this.dirty) {
+        if (d > 1) {
+          moved.add(d - 1);
+        }
+      }
+      this.dirty = moved;
+    }
+  }
+  writeChar(ch) {
+    if (this.cursorCol > VIEWPORT_COLS) {
+      this.cursorCol = 1;
+      this.lineFeed();
+    }
+    const col = this.cursorCol;
+    const row = this.getRow(this.cursorRow);
+    const before = row.substring(0, col - 1).padEnd(col - 1, " ");
+    const after = row.length >= col ? row.substring(col) : "";
+    this.setRow(this.cursorRow, before + ch + after);
+    this.cursorCol++;
   }
   applyEscape(seq) {
     if (!seq.startsWith("\x1B[")) {
@@ -713,27 +752,27 @@ var VtScreen = class {
     const body = seq.slice(2, -1);
     const final = seq[seq.length - 1];
     const params = body.replace(/^\?/, "");
+    const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+    const arg = (s, dflt = 1) => parseInt(s || String(dflt), 10) || dflt;
     switch (final) {
       case "H":
       case "f": {
         const [r, c] = params.split(";");
-        this.cursorRow = Math.max(1, parseInt(r || "1", 10) || 1);
-        this.cursorCol = Math.max(1, parseInt(c || "1", 10) || 1);
+        this.cursorRow = clamp(arg(r, 1), 1, VIEWPORT_ROWS);
+        this.cursorCol = clamp(arg(c, 1), 1, VIEWPORT_COLS + 1);
         break;
       }
       case "J": {
         const mode = params || "0";
         if (mode === "2" || mode === "3") {
-          this.rows.clear();
+          this.rows = [];
+          this.dirty.clear();
           this.cursorRow = 1;
           this.cursorCol = 1;
         } else if (mode === "0") {
-          const row = this.getRow(this.cursorRow);
-          this.rows.set(this.cursorRow, row.substring(0, this.cursorCol - 1));
-          for (const k of [...this.rows.keys()]) {
-            if (k > this.cursorRow) {
-              this.rows.delete(k);
-            }
+          this.setRow(this.cursorRow, this.getRow(this.cursorRow).substring(0, this.cursorCol - 1));
+          for (let r = this.cursorRow + 1; r <= this.rows.length; r++) {
+            this.setRow(r, "");
           }
         }
         break;
@@ -742,57 +781,67 @@ var VtScreen = class {
         const mode = params || "0";
         const row = this.getRow(this.cursorRow);
         if (mode === "0") {
-          this.rows.set(this.cursorRow, row.substring(0, this.cursorCol - 1));
+          this.setRow(this.cursorRow, row.substring(0, this.cursorCol - 1));
         } else if (mode === "1") {
-          this.rows.set(this.cursorRow, row.padEnd(this.cursorCol - 1, " "));
+          const tail = row.substring(this.cursorCol - 1);
+          this.setRow(this.cursorRow, " ".repeat(this.cursorCol - 1) + tail);
         } else {
-          this.rows.delete(this.cursorRow);
+          this.setRow(this.cursorRow, "");
         }
         break;
       }
       case "X": {
-        const n = parseInt(params || "1", 10) || 1;
+        const n = Math.min(arg(params, 1), VIEWPORT_COLS);
         const row = this.getRow(this.cursorRow);
-        const before = row.substring(0, this.cursorCol - 1);
-        const after = row.substring(this.cursorCol - 1 + n);
-        this.rows.set(this.cursorRow, before.padEnd(this.cursorCol - 1, " ") + " ".repeat(n) + after);
+        const start = this.cursorCol - 1;
+        const before = row.substring(0, start).padEnd(start, " ");
+        const after = row.substring(start + n);
+        this.setRow(this.cursorRow, (before + " ".repeat(n) + after).replace(/\s+$/, ""));
         break;
       }
       case "A":
-        this.cursorRow = Math.max(1, this.cursorRow - (parseInt(params || "1", 10) || 1));
+        this.cursorRow = clamp(this.cursorRow - arg(params, 1), 1, VIEWPORT_ROWS);
         break;
       case "B":
-        this.cursorRow += parseInt(params || "1", 10) || 1;
+        this.cursorRow = clamp(this.cursorRow + arg(params, 1), 1, VIEWPORT_ROWS);
         break;
       case "C":
-        this.cursorCol += parseInt(params || "1", 10) || 1;
+        this.cursorCol = clamp(this.cursorCol + arg(params, 1), 1, VIEWPORT_COLS + 1);
         break;
       case "D":
-        this.cursorCol = Math.max(1, this.cursorCol - (parseInt(params || "1", 10) || 1));
+        this.cursorCol = clamp(this.cursorCol - arg(params, 1), 1, VIEWPORT_COLS);
         break;
       default:
         break;
     }
   }
-  /** 当前屏幕快照:非空行数组(行尾空白已修剪) */
+  /** 当前屏幕快照:非空行数组(行尾空白已修剪)，最多 VIEWPORT_ROWS 行 */
   snapshotLines() {
-    const maxRow = Math.max(0, ...this.rows.keys());
     const lines = [];
-    for (let r = 1; r <= maxRow; r++) {
-      const line = (this.rows.get(r) ?? "").replace(/\s+$/, "");
-      lines.push(line);
+    for (let r = 1; r <= this.rows.length; r++) {
+      lines.push((this.rows[r - 1] ?? "").replace(/\s+$/, ""));
     }
     while (lines.length > 0 && lines[lines.length - 1] === "") {
       lines.pop();
     }
     return lines;
   }
+  /** 自上次 reset() 后被写过的行（行号 1-based，已按屏上顺序），用于区分本命令输出与残留 */
+  dirtyLines() {
+    return [...this.dirty].sort((a, b) => a - b).map((r) => (this.rows[r - 1] ?? "").replace(/\s+$/, ""));
+  }
   /** 判定屏幕是否包含某文本(忽略颜色等转义后逐行查找) */
   contains(needle) {
     return this.snapshotLines().some((l) => l.includes(needle));
   }
+  /**
+   * 本地模型重置。
+   * 注意：服务端是**差分渲染**，本地模型必须与服务端保持一致；
+   * 本方法只用于「已知服务端即将全屏重绘（如 Clear-Host）」的场合。
+   */
   reset() {
-    this.rows.clear();
+    this.rows = [];
+    this.dirty.clear();
     this.pending = "";
     this.cursorRow = 1;
     this.cursorCol = 1;
@@ -811,7 +860,10 @@ function matchEscape(text, i) {
   return null;
 }
 
-// termBridge.ts
+// src/termBridge.ts
+function escapeRe(s) {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 function psQuote(s) {
   return `'${s.replace(/'/g, "''")}'`;
 }
@@ -825,12 +877,13 @@ var BridgeError = class extends Error {
   }
 };
 var PAGE_ROWS = 26;
+var PAGE_SCREEN_ROWS = 35;
 var BEGIN_MARKER = "UU_BEGIN";
 function isFlushFragment(t, fullCmd) {
   const cmd = fullCmd.trim();
   return t.length >= 2 && t.length <= 24 && cmd.startsWith(t);
 }
-var SCAFFOLD_RE = /uuOut|UU_B|UU_E_|UU_N_/;
+var SCAFFOLD_RE = /uuOut|uuF64|uuPg|uuRows|UU_B|UU_E_|UU_N_|UU_P_|UU_F_|UU_R_|UU_W_/;
 function isNoiseLine(t, fullCmd) {
   if (t === "" || /^PS [^>]*>\s*$/.test(t) || /^\s*[A-Za-z]:\\[^>]*>\s*$/.test(t)) {
     return true;
@@ -848,24 +901,27 @@ var powershellProtocol = {
   flush() {
     return `Clear-Host; `;
   },
+  helpers() {
+    return `function global:uuPg($s, $e, $sn, $v, $tk) { $a = (Get-Variable -Name $v -ValueOnly); $p = @($a[$s..$e]); $r = 0; foreach ($x in $p) { $t = [string]$x; Write-Output ($t + $tk); $r += [Math]::Max(1, [Math]::Ceiling(($t.Length + $tk.Length) / ${VIEWPORT_COLS})) }; Write-Output ($sn + '=' + $p.Count + ',' + $r) }; `;
+  },
   sentry(s) {
     return `("${s.slice(0, 4)}" + "${s.slice(4)}")`;
   },
   assignRows(cmd, countSentry) {
     return `Write-Output ('UU_B' + 'EGIN'); $global:uuOut = @(${cmd}); ("${countSentry.slice(0, 4)}" + "${countSentry.slice(4)}$($global:uuOut.Count)")`;
   },
-  pageRows(start, end, s, varName = "uuOut") {
-    return `Write-Output ('UU_B' + 'EGIN'); $global:${varName}[${start}..${end}]; ("${s.slice(0, 4)}" + "${s.slice(4)}")`;
+  pageRows(start, end, s, varName = "uuOut", token = "#t#") {
+    return `Write-Output ('UU_B' + 'EGIN'); uuPg ${start} ${end} ("${s.slice(0, 4)}" + "${s.slice(4)}") ${varName} ("${token.slice(0, 4)}" + "${token.slice(4)}")`;
   },
   storeFileB64(path, countSentry, limit, varName = "uuF64") {
     return [
       `Write-Output ('UU_B' + 'EGIN');`,
-      `$f = $null; try { $f = Get-Item -Force -LiteralPath ${psQuote(path)} -ErrorAction Stop } catch { }`,
-      `if (-not $f) { Write-Output ('UU_F' + '_MISS'); $global:${varName} = @() }`,
-      `elseif ($f.PSIsContainer) { Write-Output 'ISDIR'; $global:${varName} = @() }`,
-      `elseif ($f.Length -gt ${limit}) { Write-Output ('TOOBIG|' + $f.Length); $global:${varName} = @() }`,
-      `else { $s2 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($f.FullName)); $L2 = New-Object 'System.Collections.Generic.List[string]'; for ($j = 0; $j -lt $s2.Length; $j += 76) { $L2.Add($s2.Substring($j, [Math]::Min(76, $s2.Length - $j))) }; $global:${varName} = @($L2) }`,
-      `; Write-Output ('UU_FL' + 'EN' + $s2.Length); ("${countSentry.slice(0, 4)}" + "${countSentry.slice(4)}$($global:${varName}.Count)")`
+      `$uuSt = 'OK'; $uuLen = 0; $f = $null; try { $f = Get-Item -Force -LiteralPath ${psQuote(path)} -ErrorAction Stop } catch { }`,
+      `if (-not $f) { $uuSt = 'MISS'; $global:${varName} = @() }`,
+      `elseif ($f.PSIsContainer) { $uuSt = 'ISDIR'; $global:${varName} = @() }`,
+      `elseif ($f.Length -gt ${limit}) { $uuSt = 'TOOBIG'; $uuLen = $f.Length; $global:${varName} = @() }`,
+      `else { $s2 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($f.FullName)); $uuLen = $s2.Length; $L2 = New-Object 'System.Collections.Generic.List[string]'; for ($j = 0; $j -lt $s2.Length; $j += 76) { $L2.Add($s2.Substring($j, [Math]::Min(76, $s2.Length - $j))) }; $global:${varName} = @($L2) }`,
+      `; Write-Output ('UU_ST=' + $uuSt); Write-Output ('UU_FL' + 'EN' + $uuLen); ("${countSentry.slice(0, 4)}" + "${countSentry.slice(4)}$($global:${varName}.Count)")`
     ].join(" ");
   },
   writeFileB64(path, chunks, s) {
@@ -883,14 +939,19 @@ function posixProtocol(tmpPrefix) {
     flush() {
       return `printf '\\033[H\\033[2J'; `;
     },
+    helpers() {
+      return "";
+    },
     sentry(s) {
       return `echo "${s.slice(0, 4)}""${s.slice(4)}"`;
     },
     assignRows(cmd, countSentry) {
       return `echo "UU_B""EGIN"; eval ${shQuote(cmd)} > ${tmpPrefix}uuOut 2>/dev/null; echo "${countSentry.slice(0, 4)}""${countSentry.slice(4)}$(wc -l < ${tmpPrefix}uuOut | tr -d ' ')"`;
     },
-    pageRows(start, end, s, varName = "uuOut") {
-      return `echo "UU_B""EGIN"; sed -n '${start + 1},${end + 1}p' ${shQuote(tmpPrefix + varName)}; echo "${s.slice(0, 4)}""${s.slice(4)}"`;
+    pageRows(start, end, s, varName = "uuOut", token = "#t#") {
+      const file = shQuote(tmpPrefix + varName);
+      const want = end - start + 1;
+      return `echo "UU_B""EGIN"; sed -n '${start + 1},${end + 1}p' ${file} | sed 's/$/${token}/'; echo "${s.slice(0, 4)}""${s.slice(4)}=${want},0"`;
     },
     storeFileB64(path, countSentry, limit, varName = "uuF64") {
       return [
@@ -912,6 +973,18 @@ function posixProtocol(tmpPrefix) {
     },
     quote: shQuote
   };
+}
+function joinByToken(rows, token) {
+  const out = [];
+  let acc = "";
+  for (const r of rows) {
+    acc += r;
+    if (acc.endsWith(token)) {
+      out.push(acc.slice(0, -token.length));
+      acc = "";
+    }
+  }
+  return out;
 }
 function b64ShapeValid(rows, count) {
   if (count === 0) {
@@ -946,6 +1019,8 @@ var TermBridge = class {
   chain = Promise.resolve();
   protocol;
   stderrTail = [];
+  /** 元素结束标记（会话级随机；避免鹅哥内容尾与常规噪声冲突） */
+  token = "#zq" + Math.random().toString(16).slice(2, 8) + "#";
   /** 最近一次收到渲染流的时间(静默检测用) */
   lastDataAt = 0;
   /** 串行化所有远程操作,避免命令交叉 */
@@ -1059,7 +1134,7 @@ var TermBridge = class {
       this.child = void 0;
     });
     try {
-      await this.waitSentry(this.protocol.flush() + this.protocol.sentry("UU_R_0"), "UU_R_0", 2e4);
+      await this.waitSentry(this.protocol.flush() + this.protocol.helpers() + this.protocol.sentry("UU_R_0"), "UU_R_0", 2e4);
     } catch (e) {
       const diag = this.stderrDiagnosis();
       throw diag ? new BridgeError(`\u8FDC\u7A0B\u7EC8\u7AEF\u4F1A\u8BDD\u65E0\u6CD5\u5C31\u7EEA:${diag}`) : e instanceof Error ? e : new BridgeError(String(e));
@@ -1164,20 +1239,24 @@ var TermBridge = class {
   }
   async pullPages(count, timeoutMs, varName = "uuOut") {
     const rows = [];
-    for (let start = 0; start < count; start += PAGE_ROWS) {
-      const end = Math.min(start + PAGE_ROWS - 1, count - 1);
-      this.seq++;
-      const sentry = `UU_P_${this.seq}`;
-      const cmd = this.protocol.flush() + this.protocol.pageRows(start, end, sentry, varName);
-      let pageRows = [];
+    let pageSize = Math.min(PAGE_ROWS, count);
+    let start = 0;
+    while (start < count) {
+      let accepted;
+      let lastParsed = -1;
+      let lastReported = -1;
+      let lastRequested = 0;
       for (let attempt = 0; attempt < 3; attempt++) {
+        const end = Math.min(start + pageSize - 1, count - 1);
+        lastRequested = end - start + 1;
+        this.seq++;
+        const sentry = `UU_P_${this.seq}`;
+        const cmd = this.protocol.flush() + this.protocol.pageRows(start, end, sentry, varName, this.token);
         this.send(cmd + "\r\n");
         const t0 = Date.now();
         for (; ; ) {
           await new Promise((r) => setTimeout(r, 130));
           if (this.screen.contains(sentry)) {
-            await this.settle();
-            pageRows = this.extract(sentry, cmd);
             break;
           }
           if (!this.child || this.closed) {
@@ -1187,13 +1266,40 @@ var TermBridge = class {
             throw new BridgeError(`\u5206\u9875\u8BFB\u53D6\u8D85\u65F6(\u7B2C ${start} \u884C\u8D77)`);
           }
         }
-        if (pageRows.length > 0 || end < start) {
+        await this.settle();
+        const pageRows = joinByToken(this.extract(sentry, cmd), this.token);
+        const reported = this.reportedPage(sentry);
+        lastParsed = pageRows.length;
+        lastReported = reported?.nonEmpty ?? -1;
+        const screenCost = pageRows.reduce((a, l) => a + Math.max(1, Math.ceil((l.length + this.token.length) / VIEWPORT_COLS)), 0);
+        if (reported && pageRows.length >= reported.nonEmpty) {
+          accepted = pageRows;
+          pageSize = screenCost > PAGE_SCREEN_ROWS / 2 ? pageSize : Math.min(PAGE_ROWS, count - start);
           break;
         }
+        pageSize = Math.max(1, Math.floor(pageSize / 2));
       }
-      rows.push(...pageRows);
+      if (!accepted) {
+        throw new BridgeError(
+          `\u5206\u9875\u6821\u9A8C\u5931\u8D25(\u7B2C ${start} \u884C\u8D77)\uFF1A\u89E3\u6790 ${lastParsed} \u884C < \u5BF9\u7AEF\u56DE\u62A5 ${lastReported} \u884C\uFF0C3 \u6B21\u91CD\u8BD5\u4ECD\u4E0D\u4E00\u81F4\u2014\u2014\u62D2\u7EDD\u8FD4\u56DE\u53EF\u80FD\u6B8B\u7F3A\u7684\u6570\u636E`
+        );
+      }
+      rows.push(...accepted);
+      start += lastRequested;
     }
     return rows;
+  }
+  /** 读取某页哨兵行附带的对端回报(形如 UU_P_12=26,34)；无回报返回 undefined */
+  reportedPage(sentry) {
+    const hit = this.screen.snapshotLines().find((l) => l.includes(`${sentry}=`));
+    if (!hit) {
+      return void 0;
+    }
+    const m = new RegExp(`${escapeRe(sentry)}=(\\d+),(\\d+)`).exec(hit);
+    if (!m) {
+      return void 0;
+    }
+    return { nonEmpty: parseInt(m[1], 10), screenRows: parseInt(m[2], 10) };
   }
   /**
    * 读取文件为 base64(分页拉取): 先存入服务端数组(附状态标记), 再按页读取。
@@ -1206,7 +1312,10 @@ var TermBridge = class {
       let count = 0;
       let head = [];
       let missSeen = false;
+      let sawCount = false;
+      const storeWaitMs = Math.min(timeoutMs, 45e3);
       for (let a = 0; a < 3; a++) {
+        head = [];
         this.seq++;
         const countSentry = `UU_F_${this.seq}`;
         const cmd = this.protocol.flush() + this.protocol.storeFileB64(path, countSentry, limitBytes);
@@ -1226,6 +1335,7 @@ var TermBridge = class {
           if (hit) {
             const m = new RegExp(`${countSentry}(\\d+)`).exec(hit);
             count = m ? parseInt(m[1], 10) : 0;
+            sawCount = m !== null;
             await this.settle();
             head = this.extract(countSentry, cmd);
             missSeen = false;
@@ -1234,30 +1344,46 @@ var TermBridge = class {
           if (!this.child || this.closed) {
             this.throwIfDead();
           }
-          if (Date.now() - t0 > timeoutMs) {
-            throw new BridgeError(`\u8BFB\u53D6\u6587\u4EF6\u8D85\u65F6:${path}`);
+          if (Date.now() - t0 > storeWaitMs) {
+            break;
           }
         }
-        if (head.length > 0 || count === 0 && !missSeen) {
-          break;
+        const st = /UU_ST=([A-Z]+)/.exec(head.join("\n"));
+        if (st) {
+          if (st[1] === "MISS") {
+            return ["UU_F_MISS"];
+          }
+          if (st[1] === "ISDIR" || st[1] === "TOOBIG") {
+            const lenRow2 = head.find((l) => l.startsWith("UU_FLEN"));
+            const size = lenRow2 ? lenRow2.slice("UU_FLEN".length).replace(/\D/g, "") : "";
+            return [st[1] === "TOOBIG" && size ? `TOOBIG|${size}` : st[1]];
+          }
         }
-        const marker = head.find((l) => l === "ISDIR" || l.startsWith("TOOBIG"));
-        if (marker) {
-          return [marker];
-        }
-        if (head.length > 0) {
+        if (head.length > 0 && (st !== null || count > 0)) {
           break;
         }
       }
       const lenRow = head.find((l) => l.startsWith("UU_FLEN"));
       const expectLen = lenRow ? parseInt(lenRow.slice("UU_FLEN".length), 10) : -1;
+      if (head.length === 0) {
+        throw new BridgeError(`\u6587\u4EF6\u8BFB\u53D6\u5931\u8D25:\u672A\u53D6\u5230\u8FDC\u7AEF\u72B6\u6001\u6807\u8BB0(\u6E32\u67D3\u4E22\u5931),\u62D2\u7EDD\u8FD4\u56DE\u672A\u6821\u9A8C\u7684\u6570\u636E:${path}`);
+      }
+      if (!sawCount || !Number.isFinite(expectLen) || expectLen < 0) {
+        throw new BridgeError(
+          `\u6587\u4EF6\u8BFB\u53D6\u6821\u9A8C\u5931\u8D25:\u672A\u53D6\u5230\u8FDC\u7AEF\u957F\u5EA6\u6807\u8BB0 UU_FLEN(\u6216\u884C\u6570\u6807\u8BB0)\uFF0C\u65E0\u6CD5\u6821\u9A8C\u5B8C\u6574\u6027\uFF0C\u62D2\u7EDD\u8FD4\u56DE\u6570\u636E:${path}`
+        );
+      }
       if (count === 0) {
         return [];
       }
       for (let a = 0; a < 3; a++) {
         const rows = await this.pullPages(count, timeoutMs, "uuF64");
         const joined = rows.join("");
-        if (!b64ShapeValid(rows, count) || expectLen >= 0 && joined.length !== expectLen) {
+        if (!b64ShapeValid(rows, count) || joined.length !== expectLen) {
+          continue;
+        }
+        const decoded = Buffer.from(joined, "base64");
+        if (decoded.length !== Math.floor(expectLen / 4 * 3) - (joined.endsWith("==") ? 2 : joined.endsWith("=") ? 1 : 0)) {
           continue;
         }
         return rows;
@@ -1290,7 +1416,7 @@ var TermBridge = class {
       const payload = this.protocol.writeFileB64(path, chunks, sentry) + "\r\n";
       this.send(payload);
       const t0 = Date.now();
-      const timeoutMs = Math.max(3e4, content.length / 2);
+      const timeoutMs = Math.max(6e4, Math.ceil(content.length / 1024 * 1.5 * 1e3));
       for (; ; ) {
         await new Promise((r) => setTimeout(r, 150));
         const failLine = this.screen.snapshotLines().find((l) => l.includes("UU_W_FAIL"));
@@ -1305,7 +1431,9 @@ var TermBridge = class {
           this.throwIfDead("(\u5199\u5165\u53EF\u80FD\u672A\u5B8C\u6210,\u8BF7\u68C0\u67E5\u8FDC\u7AEF\u6587\u4EF6)");
         }
         if (Date.now() - t0 > timeoutMs) {
-          throw new BridgeError(`\u5199\u6587\u4EF6\u8D85\u65F6(${timeoutMs}ms)`);
+          throw new BridgeError(
+            `\u5199\u6587\u4EF6\u8D85\u65F6(${timeoutMs}ms)\uFF1A\u8FDC\u7AEF\u6587\u4EF6\u72B6\u6001**\u672A\u77E5**\uFF08\u53EF\u80FD\u5DF2\u5199\u5165\u3001\u53EF\u80FD\u6B8B\u7F3A\uFF09\u3002\u8BF7\u5148\u6838\u5BF9\u518D\u51B3\u5B9A\u662F\u5426\u91CD\u5199\uFF1Aexec <device> "if (Test-Path '${path}') { (Get-FileHash -Algorithm SHA256 '${path}').Hash }"`
+          );
         }
       }
     });
@@ -1349,7 +1477,7 @@ var TermBridge = class {
   }
 };
 
-// main.ts
+// src/main.ts
 var resolveCli = () => resolveCliPath(process.env["UU_CLI_PATH"]);
 function parseArgs(argv) {
   const shellIdx = argv.indexOf("--shell");
@@ -1371,7 +1499,7 @@ async function main() {
   if (cmd === "list") {
     const devices = await listDevices(cli);
     for (const d of devices) {
-      console.log(`${d.deviceId}	${d.deviceName}	online=${d.isOnline}	platform=${d.platform}`);
+      console.log(`${d.deviceId}	${d.deviceName}	online=${d.isOnline}	platform=${platformName(d.platform) || d.platform}`);
     }
     return;
   }

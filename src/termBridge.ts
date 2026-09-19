@@ -22,8 +22,13 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { probeCliFeatures } from './capabilities';
-import { VtScreen } from './vt';
+import { VtScreen, VIEWPORT_COLS, VIEWPORT_ROWS } from './vt';
 import type { ShellKind } from './types';
+
+/** 正则字面量转义（把哨兵拼进 RegExp 时用） */
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 /** PowerShell 单引号字面量转义 */
 export function psQuote(s: string): string {
@@ -46,8 +51,10 @@ export class BridgeError extends Error {
   }
 }
 
-/** 每页最大输出行数(服务端屏幕 ~39 行,留哨兵/prompt/回显余量) */
+/** 每页最大输出行数(≤ 视口 39 行,留哨兵/prompt/回显余量) */
 const PAGE_ROWS = 26;
+/** 单页允许占用的最大「屏行数」——折行行按 ceil(len/120) 折算；39 行视口留 4 行余量 */
+const PAGE_SCREEN_ROWS = 35;
 
 /** 行提取起始标记(与哨兵同理,拆开拼接防回显误匹配) */
 const BEGIN_MARKER = 'UU_BEGIN';
@@ -55,12 +62,18 @@ const BEGIN_MARKER = 'UU_BEGIN';
 interface ShellProtocol {
   /** 冲刷命令前缀(输出 FLUSH_ROWS 个空行) */
   flush(): string;
+  /**
+   * 会话初始化时一次性下发的远端辅助函数定义。
+   * 目的：分页命令必须**短**——命令过长会在回显处折行，折行碎片被当成输出（2026-09-19 实测踩中）。
+   * 长定义只在握手阶段出现，而握手输出不参与解析。
+   */
+  helpers(): string;
   /** 哨兵生成命令:输出 sentry,且回显中不出现完整哨兵字面 */
   sentry(sentry: string): string;
   /** 执行命令并把输出存为行数组,输出 "计数哨兵"(<countSentry><count>) */
   assignRows(cmd: string, countSentry: string): string;
   /** 分页读取已存数组的第 [start, end] 行并输出页哨兵(varName 指定服务端变量名,默认 uuOut) */
-  pageRows(start: number, end: number, sentry: string, varName?: string): string;
+  pageRows(start: number, end: number, sentry: string, varName?: string, token?: string): string;
   /** 文件 b64 分页读取:先存入 $global:varName 数组,输出状态标记与行数哨兵 */
   storeFileB64(path: string, countSentry: string, limit: number, varName?: string): string;
   /** 写入 base64 内容(多行 chunk),输出哨兵 */
@@ -75,8 +88,8 @@ function isFlushFragment(t: string, fullCmd: string): boolean {
   return t.length >= 2 && t.length <= 24 && cmd.startsWith(t);
 }
 
-/** 回显里夹带的桥内部脚手架 token(不可能属于用户输出) */
-const SCAFFOLD_RE = /uuOut|UU_B|UU_E_|UU_N_/;
+/** 回显里夹带的桥内部脚手架 token(不可能属于用户输出；含分页/读取/写入哨兵前缀) */
+const SCAFFOLD_RE = /uuOut|uuF64|uuPg|uuRows|UU_B|UU_E_|UU_N_|UU_P_|UU_F_|UU_R_|UU_W_/;
 
 function isNoiseLine(t: string, fullCmd: string): boolean {
   if (t === '' || /^PS [^>]*>\s*$/.test(t) || /^\s*[A-Za-z]:\\[^>]*>\s*$/.test(t)) {
@@ -98,25 +111,40 @@ const powershellProtocol: ShellProtocol = {
     // (宽行内容不传输,只发 ECH 碎片);Clear-Host 强制全屏重绘,每行完整下发。
     return `Clear-Host; `;
   },
+  helpers() {
+    // uuPg <start> <end> <sentry> <varName> <token>：
+    // 每个元素后附 token 作为「元素结束」标记（宽行会被服务端折行，客户端靠 token 重组），
+    // 并回报「元素数,占屏行数」。
+    return (
+      `function global:uuPg($s, $e, $sn, $v, $tk) { ` +
+      `$a = (Get-Variable -Name $v -ValueOnly); $p = @($a[$s..$e]); ` +
+      `$r = 0; foreach ($x in $p) { $t = [string]$x; Write-Output ($t + $tk); $r += [Math]::Max(1, [Math]::Ceiling(($t.Length + $tk.Length) / ${VIEWPORT_COLS})) }; ` +
+      `Write-Output ($sn + '=' + $p.Count + ',' + $r) }; `
+    );
+  },
   sentry(s) {
     return `("${s.slice(0, 4)}" + "${s.slice(4)}")`;
   },
   assignRows(cmd, countSentry) {
     return `Write-Output ('UU_B' + 'EGIN'); $global:uuOut = @(${cmd}); ("${countSentry.slice(0, 4)}" + "${countSentry.slice(4)}$($global:uuOut.Count)")`;
   },
-  pageRows(start, end, s, varName = 'uuOut') {
-    return `Write-Output ('UU_B' + 'EGIN'); $global:${varName}[${start}..${end}]; ("${s.slice(0, 4)}" + "${s.slice(4)}")`;
+  pageRows(start, end, s, varName = 'uuOut', token = '#t#') {
+    // 保持短小（<120 列，否则回显折行会污染输出）；细节在 helpers() 里
+    return `Write-Output ('UU_B' + 'EGIN'); uuPg ${start} ${end} ("${s.slice(0, 4)}" + "${s.slice(4)}") ${varName} ("${token.slice(0, 4)}" + "${token.slice(4)}")`;
   },
   storeFileB64(path, countSentry, limit, varName = 'uuF64') {
-    // 单行 PS 语法严格:语句间必须有分号;Get-Item 失败发 MISS 标记而非静默
+    // 单行 PS 语法严格:语句间必须有分号;Get-Item 失败发 MISS 标记而非静默。
+    // 每条分支都必须下发：
+    //   UU_ST=<OK|MISS|ISDIR|TOOBIG>  显式状态（客户端必须看到它，否则报错而非推断）
+    //   UU_FLEN<len>                  b64 字符数（长度校验）
     return [
       `Write-Output ('UU_B' + 'EGIN');`,
-      `$f = $null; try { $f = Get-Item -Force -LiteralPath ${psQuote(path)} -ErrorAction Stop } catch { }`,
-      `if (-not $f) { Write-Output ('UU_F' + '_MISS'); $global:${varName} = @() }`,
-      `elseif ($f.PSIsContainer) { Write-Output 'ISDIR'; $global:${varName} = @() }`,
-      `elseif ($f.Length -gt ${limit}) { Write-Output ('TOOBIG|' + $f.Length); $global:${varName} = @() }`,
-      `else { $s2 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($f.FullName)); $L2 = New-Object 'System.Collections.Generic.List[string]'; for ($j = 0; $j -lt $s2.Length; $j += 76) { $L2.Add($s2.Substring($j, [Math]::Min(76, $s2.Length - $j))) }; $global:${varName} = @($L2) }`,
-      `; Write-Output ('UU_FL' + 'EN' + $s2.Length); ("${countSentry.slice(0, 4)}" + "${countSentry.slice(4)}$($global:${varName}.Count)")`,
+      `$uuSt = 'OK'; $uuLen = 0; $f = $null; try { $f = Get-Item -Force -LiteralPath ${psQuote(path)} -ErrorAction Stop } catch { }`,
+      `if (-not $f) { $uuSt = 'MISS'; $global:${varName} = @() }`,
+      `elseif ($f.PSIsContainer) { $uuSt = 'ISDIR'; $global:${varName} = @() }`,
+      `elseif ($f.Length -gt ${limit}) { $uuSt = 'TOOBIG'; $uuLen = $f.Length; $global:${varName} = @() }`,
+      `else { $s2 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($f.FullName)); $uuLen = $s2.Length; $L2 = New-Object 'System.Collections.Generic.List[string]'; for ($j = 0; $j -lt $s2.Length; $j += 76) { $L2.Add($s2.Substring($j, [Math]::Min(76, $s2.Length - $j))) }; $global:${varName} = @($L2) }`,
+      `; Write-Output ('UU_ST=' + $uuSt); Write-Output ('UU_FL' + 'EN' + $uuLen); ("${countSentry.slice(0, 4)}" + "${countSentry.slice(4)}$($global:${varName}.Count)")`,
     ].join(' ');
   },
   writeFileB64(path, chunks, s) {
@@ -136,6 +164,9 @@ function posixProtocol(tmpPrefix: string): ShellProtocol {
     flush() {
       return `printf '\\033[H\\033[2J'; `;
     },
+    helpers() {
+      return ''; // POSIX 侧分页命令已足够短，无需远端函数
+    },
     sentry(s) {
       // 相邻字符串拼接,输入回显中不出现完整哨兵字面
       return `echo "${s.slice(0, 4)}""${s.slice(4)}"`;
@@ -143,8 +174,14 @@ function posixProtocol(tmpPrefix: string): ShellProtocol {
     assignRows(cmd, countSentry) {
       return `echo "UU_B""EGIN"; eval ${shQuote(cmd)} > ${tmpPrefix}uuOut 2>/dev/null; echo "${countSentry.slice(0, 4)}""${countSentry.slice(4)}$(wc -l < ${tmpPrefix}uuOut | tr -d ' ')"`;
     },
-    pageRows(start, end, s, varName = 'uuOut') {
-      return `echo "UU_B""EGIN"; sed -n '${start + 1},${end + 1}p' ${shQuote(tmpPrefix + varName)}; echo "${s.slice(0, 4)}""${s.slice(4)}"`;
+    pageRows(start, end, s, varName = 'uuOut', token = '#t#') {
+      const file = shQuote(tmpPrefix + varName);
+      // 同样用 token 标记元素结束；元素数直接由区间推出
+      const want = end - start + 1;
+      return (
+        `echo "UU_B""EGIN"; sed -n '${start + 1},${end + 1}p' ${file} | sed 's/$/${token}/'; ` +
+        `echo "${s.slice(0, 4)}""${s.slice(4)}=${want},0"`
+      );
     },
     storeFileB64(path, countSentry, limit, varName = 'uuF64') {
       return [
@@ -166,6 +203,23 @@ function posixProtocol(tmpPrefix: string): ShellProtocol {
     },
     quote: shQuote,
   };
+}
+
+/** 把「带 token 结尾的屏上多行」重组为逻辑行。
+ * 服务端按 120 列自动折行，一条 203 字符的输出会变成 2 个屏幕行；
+ * 远端在肉个元素末尾附 token（可能被折行切开），因此用「累积字符串以 token 结尾」判定边界。
+ * 末尾残缺累积（token 丢失）不静默返回，交由调用方的计数校验报错。 */
+export function joinByToken(rows: string[], token: string): string[] {
+  const out: string[] = [];
+  let acc = '';
+  for (const r of rows) {
+    acc += r;
+    if (acc.endsWith(token)) {
+      out.push(acc.slice(0, -token.length));
+      acc = '';
+    }
+  }
+  return out;
 }
 
 /** b64 行形态校验: 除末行外每行 76 字符;count 为服务端报告的行数 */
@@ -192,6 +246,8 @@ export class TermBridge {
   private chain: Promise<unknown> = Promise.resolve();
   private readonly protocol: ShellProtocol;
   private readonly stderrTail: string[] = [];
+  /** 元素结束标记（会话级随机；避免鹅哥内容尾与常规噪声冲突） */
+  private readonly token = '#zq' + Math.random().toString(16).slice(2, 8) + '#';
   /** 最近一次收到渲染流的时间(静默检测用) */
   private lastDataAt = 0;
 
@@ -333,9 +389,9 @@ export class TermBridge {
     this.child.on('close', () => {
       this.child = undefined;
     });
-    // 等待会话就绪:发送握手哨兵,直到它出现在屏幕上
+    // 等待会话就绪:握手时一并定义远端辅助函数(长定义只在这里出现,不污染后续解析)
     try {
-      await this.waitSentry(this.protocol.flush() + this.protocol.sentry('UU_R_0'), 'UU_R_0', 20000);
+      await this.waitSentry(this.protocol.flush() + this.protocol.helpers() + this.protocol.sentry('UU_R_0'), 'UU_R_0', 20000);
     } catch (e) {
       const diag = this.stderrDiagnosis();
       throw diag
@@ -451,21 +507,28 @@ export class TermBridge {
 
   private async pullPages(count: number, timeoutMs: number, varName = 'uuOut'): Promise<string[]> {
     const rows: string[] = [];
-    for (let start = 0; start < count; start += PAGE_ROWS) {
-      const end = Math.min(start + PAGE_ROWS - 1, count - 1);
-      this.seq++;
-      const sentry = `UU_P_${this.seq}`;
-      const cmd = this.protocol.flush() + this.protocol.pageRows(start, end, sentry, varName);
-      // 页读取是幂等的(读服务端 uuOut 数组): 输出丢失时重发该页(最多 3 次)
-      let pageRows: string[] = [];
+    // 页大小自适应：宽行会折行，一页 26 个元素可能占 >35 个屏行而溢出视口。
+    // 对端每页回报「非空行数」与「屏行数」，解析行数不足则缩小页大小并用新哨兵重拉。
+    let pageSize = Math.min(PAGE_ROWS, count);
+    let start = 0;
+    while (start < count) {
+      let accepted: string[] | undefined;
+      let lastParsed = -1;
+      let lastReported = -1;
+      let lastRequested = 0;
       for (let attempt = 0; attempt < 3; attempt++) {
+        const end = Math.min(start + pageSize - 1, count - 1);
+        lastRequested = end - start + 1;
+        this.seq++;
+        // 每次重试必须换新哨兵：旧哨兵仍在屏上会造成假成功
+        const sentry = `UU_P_${this.seq}`;
+        const cmd =
+          this.protocol.flush() + this.protocol.pageRows(start, end, sentry, varName, this.token);
         this.send(cmd + '\r\n');
         const t0 = Date.now();
         for (;;) {
           await new Promise((r) => setTimeout(r, 130));
           if (this.screen.contains(sentry)) {
-            await this.settle();
-            pageRows = this.extract(sentry, cmd);
             break;
           }
           if (!this.child || this.closed) {
@@ -475,14 +538,45 @@ export class TermBridge {
             throw new BridgeError(`分页读取超时(第 ${start} 行起)`);
           }
         }
-        if (pageRows.length > 0 || end < start) {
+        await this.settle();
+        // 屏上行 → 逻辑行：宽行折行产生的续行在此合并
+        const pageRows = joinByToken(this.extract(sentry, cmd), this.token);
+        const reported = this.reportedPage(sentry);
+        lastParsed = pageRows.length;
+        lastReported = reported?.nonEmpty ?? -1;
+        const screenCost = pageRows.reduce((a, l) => a + Math.max(1, Math.ceil((l.length + this.token.length) / VIEWPORT_COLS)), 0);
+        // 无对端回报 = 无法校验 → 不信任本页
+        if (reported && pageRows.length >= reported.nonEmpty) {
+          accepted = pageRows;
+          pageSize =
+            screenCost > PAGE_SCREEN_ROWS / 2 ? pageSize : Math.min(PAGE_ROWS, count - start);
           break;
         }
-        // 抽到 0 行但区间非空 → 渲染丢失,重试该页
+        // 校验不通过：缩小页大小重试同一区间
+        pageSize = Math.max(1, Math.floor(pageSize / 2));
       }
-      rows.push(...pageRows);
+      if (!accepted) {
+        throw new BridgeError(
+          `分页校验失败(第 ${start} 行起)：解析 ${lastParsed} 行 < 对端回报 ${lastReported} 行，3 次重试仍不一致——拒绝返回可能残缺的数据`,
+        );
+      }
+      rows.push(...accepted);
+      start += lastRequested;
     }
     return rows;
+  }
+
+  /** 读取某页哨兵行附带的对端回报(形如 UU_P_12=26,34)；无回报返回 undefined */
+  private reportedPage(sentry: string): { nonEmpty: number; screenRows: number } | undefined {
+    const hit = this.screen.snapshotLines().find((l) => l.includes(`${sentry}=`));
+    if (!hit) {
+      return undefined;
+    }
+    const m = new RegExp(`${escapeRe(sentry)}=(\\d+),(\\d+)`).exec(hit);
+    if (!m) {
+      return undefined;
+    }
+    return { nonEmpty: parseInt(m[1], 10), screenRows: parseInt(m[2], 10) };
   }
 
   /**
@@ -497,7 +591,11 @@ export class TermBridge {
       let head: string[] = [];
       // 阶段一: 存入服务端数组 + 报告行数与 b64 总长(最多重试 2 次)
       let missSeen = false;
+      let sawCount = false;
+      // 单轮存储等待预算：标记未渲染时提前进入下一轮重试，而不是死等整个 timeoutMs（F-18）
+      const storeWaitMs = Math.min(timeoutMs, 45_000);
       for (let a = 0; a < 3; a++) {
+        head = [];
         this.seq++;
         const countSentry = `UU_F_${this.seq}`;
         const cmd = this.protocol.flush() + this.protocol.storeFileB64(path, countSentry, limitBytes);
@@ -518,6 +616,7 @@ export class TermBridge {
           if (hit) {
             const m = new RegExp(`${countSentry}(\\d+)`).exec(hit);
             count = m ? parseInt(m[1], 10) : 0;
+            sawCount = m !== null;
             await this.settle();
             head = this.extract(countSentry, cmd);
             missSeen = false;
@@ -526,24 +625,40 @@ export class TermBridge {
           if (!this.child || this.closed) {
             this.throwIfDead();
           }
-          if (Date.now() - t0 > timeoutMs) {
-            throw new BridgeError(`读取文件超时:${path}`);
+          if (Date.now() - t0 > storeWaitMs) {
+            break; // 本轮没拿到标记 → 直接重试，不在这里抛超时
           }
         }
-        if (head.length > 0 || (count === 0 && !missSeen)) {
+        // 状态标记优先判定：ISDIR/TOOBIG/MISS 都会伴随 count=0，必须先看状态
+        const st = /UU_ST=([A-Z]+)/.exec(head.join('\n'));
+        if (st) {
+          if (st[1] === 'MISS') {
+            return ['UU_F_MISS'];
+          }
+          if (st[1] === 'ISDIR' || st[1] === 'TOOBIG') {
+            const lenRow = head.find((l) => l.startsWith('UU_FLEN'));
+            const size = lenRow ? lenRow.slice('UU_FLEN'.length).replace(/\D/g, '') : '';
+            return [st[1] === 'TOOBIG' && size ? `TOOBIG|${size}` : st[1]];
+          }
+        }
+        if (head.length > 0 && (st !== null || count > 0)) {
           break;
         }
-        const marker = head.find((l) => l === 'ISDIR' || l.startsWith('TOOBIG'));
-        if (marker) {
-          return [marker];
-        }
-        if (head.length > 0) {
-          break;
-        }
-        // MISS 或空结果,重存一次
+        // 标记缺失/空结果 → 重存一次
       }
       const lenRow = head.find((l) => l.startsWith('UU_FLEN'));
       const expectLen = lenRow ? parseInt(lenRow.slice('UU_FLEN'.length), 10) : -1;
+      // 「校验缺失」必须表现为失败，而不是静默跳过：
+      // 2026-09-19 实测：UU_FLEN 未被渲染时旧实现把 expectLen 置 -1 直接跳过校验，
+      // 导致 32KB 读取返回变长错误数据且 exit=0（F-19）。
+      if (head.length === 0) {
+        throw new BridgeError(`文件读取失败:未取到远端状态标记(渲染丢失),拒绝返回未校验的数据:${path}`);
+      }
+      if (!sawCount || !Number.isFinite(expectLen) || expectLen < 0) {
+        throw new BridgeError(
+          `文件读取校验失败:未取到远端长度标记 UU_FLEN(或行数标记)，无法校验完整性，拒绝返回数据:${path}`,
+        );
+      }
       if (count === 0) {
         return [];
       }
@@ -551,7 +666,11 @@ export class TermBridge {
       for (let a = 0; a < 3; a++) {
         const rows = await this.pullPages(count, timeoutMs, 'uuF64');
         const joined = rows.join('');
-        if (!b64ShapeValid(rows, count) || (expectLen >= 0 && joined.length !== expectLen)) {
+        if (!b64ShapeValid(rows, count) || joined.length !== expectLen) {
+          continue;
+        }
+        const decoded = Buffer.from(joined, 'base64');
+        if (decoded.length !== Math.floor((expectLen / 4) * 3) - (joined.endsWith('==') ? 2 : joined.endsWith('=') ? 1 : 0)) {
           continue;
         }
         return rows;
@@ -585,7 +704,9 @@ export class TermBridge {
       const payload = this.protocol.writeFileB64(path, chunks, sentry) + '\r\n';
       this.send(payload);
       const t0 = Date.now();
-      const timeoutMs = Math.max(30000, content.length / 2);
+      // 超时预算按实测吞吐（~1.7KB/s）× 1.5 余量，且不低于 60s。
+      // 旧预算 max(30000, len/2) 低于实测所需时间，导致 32KB 写入实际成功却报超时（F-17）。
+      const timeoutMs = Math.max(60_000, Math.ceil((content.length / 1024) * 1.5 * 1000));
       for (;;) {
         await new Promise((r) => setTimeout(r, 150));
         const failLine = this.screen.snapshotLines().find((l) => l.includes('UU_W_FAIL'));
@@ -600,7 +721,10 @@ export class TermBridge {
           this.throwIfDead('(写入可能未完成,请检查远端文件)');
         }
         if (Date.now() - t0 > timeoutMs) {
-          throw new BridgeError(`写文件超时(${timeoutMs}ms)`);
+          throw new BridgeError(
+            `写文件超时(${timeoutMs}ms)：远端文件状态**未知**（可能已写入、可能残缺）。` +
+              `请先核对再决定是否重写：exec <device> "if (Test-Path '${path}') { (Get-FileHash -Algorithm SHA256 '${path}').Hash }"`,
+          );
         }
       }
     });

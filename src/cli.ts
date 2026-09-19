@@ -125,6 +125,18 @@ export async function resolveCliPath(configured?: string): Promise<string> {
   );
 }
 
+/** 从 CLI stderr 里提取真正有用的错因行（过滤 [连接] 进度噪声，保留错误关键词行） */
+export function cliDiagnosis(stderr: string): string {
+  const noise = /^\[(连接|系统|提示)\]|^─+$|^Warning:/i;
+  const signal = /版本|不兼容|过低|失败|错误|拒绝|不存在|超时|无效|未找到|不支持|锁屏|密码|Error/i;
+  const lines = stripAnsi(stderr)
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .filter((l) => signal.test(l) || !noise.test(l));
+  return lines.join(';').slice(0, 200);
+}
+
 /** 执行 CLI 并收集输出。超时强制终止(默认 15s,防止主应用无响应时挂死)。 */
 export async function execCli(
   cliPath: string,
@@ -142,7 +154,11 @@ export async function execCli(
       if (!settled) {
         child.kill();
         settled = true;
-        reject(new CliError(`命令超时(${timeoutMs}ms):${args.join(' ')}`));
+        // 超时也必须带上 stderr 错因：实测锁屏时 CLI 会输出
+        // 「[系统] 检测到被控端已锁屏，请输入被控端账户密码验证身份」后取空密码退出，
+        // 旧实现只报「命令超时」，把真实原因吞掉（F-11）。
+        const diag = cliDiagnosis(Buffer.concat(stderrChunks).toString('utf8'));
+        reject(new CliError(`命令超时(${timeoutMs}ms):${args.join(' ')}${diag ? ` —— ${diag}` : ''}`));
       }
     }, timeoutMs);
 
