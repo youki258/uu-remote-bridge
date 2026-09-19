@@ -23,7 +23,7 @@ origin: "Execution core from song-chaoyang/uu-remote-vscode (MIT); operational r
 | `src/` | TypeScript 源码（可审计、可重编译） |
 | `scripts/uu-doctor.ps1` | 只读体检：CLI 存在性、主程序通信、设备在线、现有会话（动手前先跑） |
 | `scripts/uu-push-file.ps1` | 小文件分块推送（上游脚本，当前版本标记渲染未适配，暂用 `write` 替代） |
-| `vendor/official-docs/` | 官方文档全文存档 + `INDEX.md`（硬约束/待验项）。**不进 Git** |
+| `vendor/official-docs/` | 官方文档全文存档 + `INDEX.md`（硬约束/待验项）。**不进 Git、克隆后不存在**；仅本地参考 |
 
 Windows 上调用（skill 目录通常为 `%USERPROFILE%\.agents\skills\uu-remote-bridge`）：
 
