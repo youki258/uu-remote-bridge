@@ -8,7 +8,7 @@
  * 官方要求(https://uuyc.163.com/help/20260509/40220_1299599.html):
  * - 终端功能要求主控端与被控端均为 V4.39.0 及以上
  *
- * 只读约束:不创建会话、不 kill 会话、不列出会话(不触碰 term 独占通道)。
+ * 默认只读约束:不创建会话、不 kill 会话；设备级探针仅按需列出现有会话，不触碰会话内容。
  */
 import { execCli, listDevices, looksLikeError, platformName, resolveCliPath } from './cli';
 import { probeCliFeatures } from './capabilities';
