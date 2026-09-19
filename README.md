@@ -18,7 +18,7 @@ node bin\uu-bridge.cjs exec <device_id> "hostname"
 
 - UU远程 主程序**运行且已登录**，主控端与被控端**同账号**（未运行 → 退出码 2；未登录 → 错误码 1001）
 - 两端均 **V4.39.0 及以上**，且**主控端不低于被控端**（本项目不锁版本，能力运行时探测，升级后无需改配置）
-- 被控端**仅支持 Windows**；锁屏时进终端需一次系统账户验证
+- 被控端支持 **Windows / macOS**（Linux 与移动端不支持，官方约束）；**本项目实测范围仅 Windows 被控端**。锁屏时进终端需一次系统账户验证（Windows 主控端发起需手动输密码）
 - Node.js ≥ 20
 
 作为 agent skill 使用：整个目录拷到 `%USERPROFILE%\.agents\skills\uu-remote-bridge`（Claude Code / pi / Codex 的 skill 目录），`SKILL.md` 自动生效。
