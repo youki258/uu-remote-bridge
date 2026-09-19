@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { looksLikeError } from '../src/cli';
 import { classifyTermDiagnostic } from '../src/doctor';
 
 const cases = [
@@ -51,4 +52,5 @@ for (const testCase of cases) {
 }
 
 assert.equal(classifyTermDiagnostic('').status, 'UNKNOWN');
+assert.equal(looksLikeError({ code: 0, stdout: 'Error: terminal not active', stderr: '' }), true);
 console.log(`doctor diagnostics: ${cases.length + 1} cases passed`);

@@ -22,6 +22,7 @@
  */
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process';
 import { probeCliFeatures } from './capabilities';
+import { classifyTermDiagnostic } from './doctor';
 import { VtScreen, VIEWPORT_COLS, VIEWPORT_ROWS } from './vt';
 import type { ShellKind } from './types';
 
@@ -322,10 +323,15 @@ export class TermBridge {
     return meaningful.length > 0 ? meaningful.join(';').slice(0, 200) : '';
   }
 
+  private diagnosticHint(text: string): string {
+    return classifyTermDiagnostic(text).hint ?? '';
+  }
+
   /** 进程已断开时抛错;带上 stderr 中的关键错误行(如「主控端版本过低」),让用户看到真实原因 */
   private throwIfDead(detail = ''): never {
     const diag = this.stderrDiagnosis();
-    throw new BridgeError(`远程终端会话已断开${detail}${diag ? ` —— ${diag}` : ''}`);
+    const hint = this.diagnosticHint(diag);
+    throw new BridgeError(`远程终端会话已断开${detail}${diag ? ` —— ${diag}` : ''}${hint ? `；建议：${hint}` : ''}`);
   }
 
   private async start(): Promise<void> {
@@ -394,8 +400,9 @@ export class TermBridge {
       await this.waitSentry(this.protocol.flush() + this.protocol.helpers() + this.protocol.sentry('UU_R_0'), 'UU_R_0', 20000);
     } catch (e) {
       const diag = this.stderrDiagnosis();
+      const hint = this.diagnosticHint(diag);
       throw diag
-        ? new BridgeError(`远程终端会话无法就绪:${diag}`)
+        ? new BridgeError(`远程终端会话无法就绪:${diag}${hint ? `；建议：${hint}` : ''}`)
         : e instanceof Error
           ? e
           : new BridgeError(String(e));
@@ -415,7 +422,11 @@ export class TermBridge {
         this.throwIfDead();
       }
       if (Date.now() - t0 > timeoutMs) {
-        throw new BridgeError(`命令超时(${timeoutMs}ms),设备可能繁忙或离线`);
+        const diag = this.stderrDiagnosis();
+        const hint = this.diagnosticHint(diag);
+        throw new BridgeError(
+          `命令超时(${timeoutMs}ms),设备可能繁忙或离线${diag ? ` —— ${diag}` : ''}${hint ? `；建议：${hint}` : ''}`,
+        );
       }
     }
   }

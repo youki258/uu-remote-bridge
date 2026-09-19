@@ -40,6 +40,7 @@ node "%USERPROFILE%\.agents\skills\uu-remote-bridge\bin\uu-bridge.cjs" <子命�
 | 命令 | 说明 |
 |---|---|
 | `doctor` | 只读预检：CLI 路径/版本、主程序连通、设备在线、≥V4.39.0 判定（不触碰 term 通道） |
+| `doctor <device_id>` | 只读探测指定设备的 term 通道；不创建、终止或抢占会话 |
 | `list` | 列出账号下所有设备（ID、名称、在线状态） |
 | `exec <device_id> "<命令>"` | 远程执行一条命令，自动分页拉全输出（默认 powershell） |
 | `read <device_id> <远程路径>` | 读远程文件到 stdout（base64 分页+长度强校验，≤256KB） |
@@ -52,7 +53,7 @@ node "%USERPROFILE%\.agents\skills\uu-remote-bridge\bin\uu-bridge.cjs" <子命�
 
 ## 标准工作流
 
-1. 动手前跑只读体检：`node bin\uu-bridge.cjs doctor` 或 `pwsh -File scripts/uu-doctor.ps1`（确认主程序通信、设备在线、**无他人正在使用远程机**）
+1. 动手前跑只读体检：`node bin\uu-bridge.cjs doctor` 或 `pwsh -File scripts/uu-doctor.ps1`（确认主程序通信、设备在线）；已知设备 ID 时运行 `node bin\uu-bridge.cjs doctor <device_id>` 检查终端通道
 2. `list` 拿设备 ID（设备 ID 会变，不要硬编码记忆值）
 3. `exec` 执行命令；判读用 `NAME=VALUE` 结构化标记（如 `HASH=...`、`COUNT=113`），不依赖整段文本
 4. 任务结束清理自己产生的临时文件与残留，复核为空才算完成

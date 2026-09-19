@@ -2,6 +2,17 @@
 
 本文件记录对外可见的行为变更。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased]
+
+### Added
+
+- `doctor <device_id>` 通过只读 `term --list-sessions` 探测指定设备的终端通道，不创建、终止或抢占会话。
+- 终端诊断会区分通道未激活/版本不兼容、锁屏、会话占用、设备不可用和旧版 CLI，并输出下一步建议。
+
+### Changed
+
+- `TermBridge` 的启动失败、断开和超时错误复用同一诊断分类，提示先在 UU 远程 GUI 打开终端等修复动作。
+
 ## [1.1.0] - 2026-09-19
 
 协议层修复：把「靠不越界碰巧正确」改成「要么返回正确数据，要么显式报错」。全部结论来自 UU远程 **4.41.0.2311** 真机复测（Windows → Windows），证据见 `PROTOCOL.md` 与 `TEST-REPORT.md` 复测节。

@@ -516,79 +516,6 @@ init_cli();
 
 // src/doctor.ts
 init_cli();
-var EXIT_CODE_HINTS = {
-  0: "\u6210\u529F",
-  1: "\u914D\u7F6E\u6587\u4EF6\u8BFB\u53D6\u9519\u8BEF",
-  2: "\u65E0\u6CD5\u8FDE\u63A5 UU\u8FDC\u7A0B\u4E3B\u7A0B\u5E8F(\u5BA2\u6237\u7AEF\u672A\u6253\u5F00\u6216\u672A\u767B\u5F55)",
-  3: "\u8F93\u5165\u65E0\u6548\u547D\u4EE4/\u53C2\u6570\u9519\u8BEF",
-  4: "\u8BF7\u6C42\u6570\u636E\u4E0D\u53EF\u7528\u3001\u8BBE\u5907\u4E0D\u5B58\u5728",
-  5: "\u63A5\u53E3\u6267\u884C\u8D85\u65F6",
-  6: "\u8FDC\u7A0B\u7EC8\u7AEF\u5185\u90E8\u6267\u884C\u5931\u8D25",
-  99: "\u672A\u77E5\u5F02\u5E38\u9519\u8BEF"
-};
-function hintForExitCode(code) {
-  return EXIT_CODE_HINTS[code] ?? `\u672A\u77E5\u9000\u51FA\u7801(${code})`;
-}
-var TERM_MIN_VERSION = "4.39.0";
-function meetsTermMinVersion(version) {
-  const m = version.match(/(\d+)\.(\d+)/);
-  if (!m) {
-    return void 0;
-  }
-  const major = Number(m[1]);
-  const minor = Number(m[2]);
-  const [minMajor, minMinor] = TERM_MIN_VERSION.split(".").map(Number);
-  return major > minMajor || major === minMajor && minor >= minMinor;
-}
-async function runDoctor(configured) {
-  const out = (line) => console.log(line);
-  let cliPath;
-  try {
-    cliPath = await resolveCliPath(configured);
-  } catch (e) {
-    out("CLI_FOUND=False");
-    out(`HINT=${e instanceof Error ? e.message : String(e)}`);
-    return 1;
-  }
-  out("CLI_FOUND=True");
-  out(`CLI_PATH=${cliPath}`);
-  const ver = await execCli(cliPath, ["version"], { timeoutMs: 8e3 });
-  const version = ver.stdout.split(/\r?\n/)[0]?.trim() ?? "";
-  out(`CLI_VERSION=${version || "(\u672A\u77E5)"}`);
-  const minOk = version ? meetsTermMinVersion(version) : void 0;
-  out(`TERM_MIN_VERSION=${TERM_MIN_VERSION}`);
-  out(`TERM_VERSION_OK=${minOk === void 0 ? "UNKNOWN" : minOk}`);
-  const echo2 = await execCli(cliPath, ["echo", "uu-doctor"], { timeoutMs: 8e3 });
-  out(`MAIN_APP_OK=${echo2.code === 0}`);
-  if (echo2.code !== 0) {
-    out(`MAIN_APP_EXIT_CODE=${echo2.code}`);
-    out(`HINT=${hintForExitCode(echo2.code)}`);
-    if (minOk === false) {
-      out("HINT_UPGRADE=\u4E3B\u63A7\u7AEF\u7248\u672C\u4F4E\u4E8E V4.39.0,\u7EC8\u7AEF\u529F\u80FD\u4E0D\u53EF\u7528;\u8BF7\u5347\u7EA7\u5230\u4E0E\u88AB\u63A7\u7AEF\u76F8\u540C\u6216\u66F4\u65B0\u7248\u672C");
-    }
-    return 2;
-  }
-  try {
-    const devices = await listDevices(cliPath);
-    const online = devices.filter((d) => d.isOnline);
-    out(`DEVICE_COUNT=${devices.length}`);
-    out(`DEVICE_ONLINE_COUNT=${online.length}`);
-    for (const d of devices) {
-      out(`DEVICE=${d.deviceId}	${d.deviceName}	online=${d.isOnline}	platform=${platformName(d.platform) || d.platform}`);
-    }
-    if (online.length === 0) {
-      out("HINT=\u6CA1\u6709\u5728\u7EBF\u8BBE\u5907,exec/read/write \u65E0\u6CD5\u6267\u884C");
-    }
-  } catch (e) {
-    out("DEVICE_LIST_OK=False");
-    out(`HINT=${e instanceof Error ? e.message : String(e)}`);
-  }
-  out("SESSIONS=\u7528 sessions <device_id> \u67E5\u770B(\u4F1A\u89E6\u78B0 term \u72EC\u5360\u901A\u9053,\u786E\u8BA4\u65E0\u4EBA\u5360\u7528\u518D\u6267\u884C)");
-  return 0;
-}
-
-// src/termBridge.ts
-var import_child_process3 = require("child_process");
 
 // src/capabilities.ts
 var import_child_process2 = require("child_process");
@@ -667,6 +594,131 @@ async function isSupportedFlag(cliPath) {
   const out = await runCli(cliPath, ["-d"], 3e3);
   return !isUnsupportedArgs(out) && out.trim().length > 0 && !/^error:/i.test(out.trim());
 }
+
+// src/doctor.ts
+var EXIT_CODE_HINTS = {
+  0: "\u6210\u529F",
+  1: "\u914D\u7F6E\u6587\u4EF6\u8BFB\u53D6\u9519\u8BEF",
+  2: "\u65E0\u6CD5\u8FDE\u63A5 UU\u8FDC\u7A0B\u4E3B\u7A0B\u5E8F(\u5BA2\u6237\u7AEF\u672A\u6253\u5F00\u6216\u672A\u767B\u5F55)",
+  3: "\u8F93\u5165\u65E0\u6548\u547D\u4EE4/\u53C2\u6570\u9519\u8BEF",
+  4: "\u8BF7\u6C42\u6570\u636E\u4E0D\u53EF\u7528\u3001\u8BBE\u5907\u4E0D\u5B58\u5728",
+  5: "\u63A5\u53E3\u6267\u884C\u8D85\u65F6",
+  6: "\u8FDC\u7A0B\u7EC8\u7AEF\u5185\u90E8\u6267\u884C\u5931\u8D25",
+  99: "\u672A\u77E5\u5F02\u5E38\u9519\u8BEF"
+};
+function hintForExitCode(code) {
+  return EXIT_CODE_HINTS[code] ?? `\u672A\u77E5\u9000\u51FA\u7801(${code})`;
+}
+var TERM_MIN_VERSION = "4.39.0";
+function classifyTermDiagnostic(text) {
+  const normalized = text.trim();
+  if (/锁屏|账户密码|系统账户验证|screen.*lock|password/i.test(normalized)) {
+    return { status: "LOCKED", hint: "\u8BF7\u5148\u5B8C\u6210\u88AB\u63A7\u7AEF\u7CFB\u7EDF\u8D26\u6237\u9A8C\u8BC1" };
+  }
+  if (/attached from another window|已被其他窗口|会话.*占用|already exists/i.test(normalized)) {
+    return { status: "BUSY", hint: "\u5F53\u524D\u7EC8\u7AEF\u5DF2\u88AB\u5176\u4ED6\u7A97\u53E3\u5360\u7528\uFF0C\u8BF7\u7B49\u5F85\u540E\u91CD\u8BD5" };
+  }
+  if (/不支持远程终端管道|不支持.*管道|unknown option.*device-id|term.*unsupported/i.test(normalized)) {
+    return { status: "UNSUPPORTED_CLI", hint: "\u8BF7\u5347\u7EA7 UU\u8FDC\u7A0B\u4E3B\u7A0B\u5E8F" };
+  }
+  if (/设备离线|无法连接.*设备|设备不存在|主程序.*未运行|未登录|device.*offline|not found/i.test(normalized)) {
+    return { status: "UNAVAILABLE", hint: "\u8BF7\u786E\u8BA4\u8BBE\u5907\u5728\u7EBF\u4E14 UU\u8FDC\u7A0B\u4E3B\u7A0B\u5E8F\u5DF2\u767B\u5F55" };
+  }
+  if (/版本过低|版本不匹配|不再兼容|协议版本|通道.*未激活|terminal.*not.*active|open.*terminal/i.test(normalized)) {
+    return {
+      status: "NEEDS_ACTIVATION_OR_VERSION_MISMATCH",
+      hint: "\u8BF7\u5148\u5728 UU\u8FDC\u7A0B\u4E3B\u7A0B\u5E8F\u4E2D\u6253\u5F00\u8BE5\u8BBE\u5907\u7684\u7EC8\u7AEF\u7A97\u53E3\uFF1B\u4ECD\u5931\u8D25\u65F6\u68C0\u67E5\u4E3B\u63A7\u7AEF\u4E0E\u88AB\u63A7\u7AEF\u7248\u672C"
+    };
+  }
+  return { status: "UNKNOWN" };
+}
+function diagnosticText(result) {
+  return result.hint ? `${result.status};${result.hint}` : result.status;
+}
+function meetsTermMinVersion(version) {
+  const m = version.match(/(\d+)\.(\d+)/);
+  if (!m) {
+    return void 0;
+  }
+  const major = Number(m[1]);
+  const minor = Number(m[2]);
+  const [minMajor, minMinor] = TERM_MIN_VERSION.split(".").map(Number);
+  return major > minMajor || major === minMajor && minor >= minMinor;
+}
+async function runDoctor(configured, deviceId) {
+  const out = (line) => console.log(line);
+  let cliPath;
+  try {
+    cliPath = await resolveCliPath(configured);
+  } catch (e) {
+    out("CLI_FOUND=False");
+    out(`HINT=${e instanceof Error ? e.message : String(e)}`);
+    return 1;
+  }
+  out("CLI_FOUND=True");
+  out(`CLI_PATH=${cliPath}`);
+  const ver = await execCli(cliPath, ["version"], { timeoutMs: 8e3 });
+  const version = ver.stdout.split(/\r?\n/)[0]?.trim() ?? "";
+  out(`CLI_VERSION=${version || "(\u672A\u77E5)"}`);
+  const minOk = version ? meetsTermMinVersion(version) : void 0;
+  out(`TERM_MIN_VERSION=${TERM_MIN_VERSION}`);
+  out(`TERM_VERSION_OK=${minOk === void 0 ? "UNKNOWN" : minOk}`);
+  const echo2 = await execCli(cliPath, ["echo", "uu-doctor"], { timeoutMs: 8e3 });
+  out(`MAIN_APP_OK=${echo2.code === 0}`);
+  if (echo2.code !== 0) {
+    out(`MAIN_APP_EXIT_CODE=${echo2.code}`);
+    out(`HINT=${hintForExitCode(echo2.code)}`);
+    if (minOk === false) {
+      out("HINT_UPGRADE=\u4E3B\u63A7\u7AEF\u7248\u672C\u4F4E\u4E8E V4.39.0,\u7EC8\u7AEF\u529F\u80FD\u4E0D\u53EF\u7528;\u8BF7\u5347\u7EA7\u5230\u4E0E\u88AB\u63A7\u7AEF\u76F8\u540C\u6216\u66F4\u65B0\u7248\u672C");
+    }
+    return 2;
+  }
+  try {
+    const devices = await listDevices(cliPath);
+    const online = devices.filter((d) => d.isOnline);
+    out(`DEVICE_COUNT=${devices.length}`);
+    out(`DEVICE_ONLINE_COUNT=${online.length}`);
+    for (const d of devices) {
+      out(`DEVICE=${d.deviceId}	${d.deviceName}	online=${d.isOnline}	platform=${platformName(d.platform) || d.platform}`);
+    }
+    if (online.length === 0) {
+      out("HINT=\u6CA1\u6709\u5728\u7EBF\u8BBE\u5907,exec/read/write \u65E0\u6CD5\u6267\u884C");
+    }
+  } catch (e) {
+    out("DEVICE_LIST_OK=False");
+    out(`HINT=${e instanceof Error ? e.message : String(e)}`);
+  }
+  if (deviceId) {
+    const features = await probeCliFeatures(cliPath);
+    if (!features.termChannel) {
+      out("TERM_PROBE_OK=False");
+      out("TERM_CHANNEL_STATUS=UNSUPPORTED_CLI");
+      out("TERM_HINT=\u5F53\u524D uuyc-cli \u4E0D\u652F\u6301\u8FDC\u7A0B\u7EC8\u7AEF\u7BA1\u9053,\u8BF7\u5347\u7EA7 UU\u8FDC\u7A0B\u4E3B\u7A0B\u5E8F");
+      return 0;
+    }
+    const probe = await execCli(cliPath, ["term", "--device-id", deviceId, "--list-sessions"], { timeoutMs: 3e4 });
+    const detail = [probe.stderr, probe.stdout].filter(Boolean).join("\n");
+    if (!looksLikeError(probe)) {
+      out("TERM_PROBE_OK=True");
+      out("TERM_CHANNEL_STATUS=READY");
+      out("TERM_SESSIONS=\u5DF2\u8BFB\u53D6(\u672A\u521B\u5EFA\u6216\u7EC8\u6B62\u4F1A\u8BDD)");
+    } else {
+      const diagnostic = classifyTermDiagnostic(detail || `\u9000\u51FA\u7801 ${probe.code}`);
+      out("TERM_PROBE_OK=False");
+      out(`TERM_CHANNEL_STATUS=${diagnostic.status}`);
+      if (detail) {
+        out(`TERM_ERROR=${detail.replace(/[\r\n]+/g, ";").slice(0, 300)}`);
+      }
+      out(`TERM_HINT=${diagnosticText(diagnostic)}`);
+    }
+  } else {
+    out("SESSIONS=\u7528 doctor <device_id> \u63A2\u6D4B\u7EC8\u7AEF\u901A\u9053\uFF1Bsessions <device_id> \u4F1A\u89E6\u78B0 term \u72EC\u5360\u901A\u9053,\u786E\u8BA4\u65E0\u4EBA\u5360\u7528\u518D\u6267\u884C");
+  }
+  return 0;
+}
+
+// src/termBridge.ts
+var import_child_process3 = require("child_process");
 
 // src/vt.ts
 var VIEWPORT_ROWS = 39;
@@ -1075,10 +1127,14 @@ var TermBridge = class {
     const meaningful = this.stderrTail.filter((l) => signal.test(l) || !noise.test(l));
     return meaningful.length > 0 ? meaningful.join(";").slice(0, 200) : "";
   }
+  diagnosticHint(text) {
+    return classifyTermDiagnostic(text).hint ?? "";
+  }
   /** 进程已断开时抛错;带上 stderr 中的关键错误行(如「主控端版本过低」),让用户看到真实原因 */
   throwIfDead(detail = "") {
     const diag = this.stderrDiagnosis();
-    throw new BridgeError(`\u8FDC\u7A0B\u7EC8\u7AEF\u4F1A\u8BDD\u5DF2\u65AD\u5F00${detail}${diag ? ` \u2014\u2014 ${diag}` : ""}`);
+    const hint = this.diagnosticHint(diag);
+    throw new BridgeError(`\u8FDC\u7A0B\u7EC8\u7AEF\u4F1A\u8BDD\u5DF2\u65AD\u5F00${detail}${diag ? ` \u2014\u2014 ${diag}` : ""}${hint ? `\uFF1B\u5EFA\u8BAE\uFF1A${hint}` : ""}`);
   }
   async start() {
     const delays = [0, 8e3, 16e3];
@@ -1137,7 +1193,8 @@ var TermBridge = class {
       await this.waitSentry(this.protocol.flush() + this.protocol.helpers() + this.protocol.sentry("UU_R_0"), "UU_R_0", 2e4);
     } catch (e) {
       const diag = this.stderrDiagnosis();
-      throw diag ? new BridgeError(`\u8FDC\u7A0B\u7EC8\u7AEF\u4F1A\u8BDD\u65E0\u6CD5\u5C31\u7EEA:${diag}`) : e instanceof Error ? e : new BridgeError(String(e));
+      const hint = this.diagnosticHint(diag);
+      throw diag ? new BridgeError(`\u8FDC\u7A0B\u7EC8\u7AEF\u4F1A\u8BDD\u65E0\u6CD5\u5C31\u7EEA:${diag}${hint ? `\uFF1B\u5EFA\u8BAE\uFF1A${hint}` : ""}`) : e instanceof Error ? e : new BridgeError(String(e));
     }
   }
   async waitSentry(fullCmd, sentry, timeoutMs) {
@@ -1153,7 +1210,11 @@ var TermBridge = class {
         this.throwIfDead();
       }
       if (Date.now() - t0 > timeoutMs) {
-        throw new BridgeError(`\u547D\u4EE4\u8D85\u65F6(${timeoutMs}ms),\u8BBE\u5907\u53EF\u80FD\u7E41\u5FD9\u6216\u79BB\u7EBF`);
+        const diag = this.stderrDiagnosis();
+        const hint = this.diagnosticHint(diag);
+        throw new BridgeError(
+          `\u547D\u4EE4\u8D85\u65F6(${timeoutMs}ms),\u8BBE\u5907\u53EF\u80FD\u7E41\u5FD9\u6216\u79BB\u7EBF${diag ? ` \u2014\u2014 ${diag}` : ""}${hint ? `\uFF1B\u5EFA\u8BAE\uFF1A${hint}` : ""}`
+        );
       }
     }
   }
@@ -1492,7 +1553,7 @@ async function main() {
   const { shell, args } = parseArgs(process.argv.slice(2));
   const [cmd, ...rest] = args;
   if (cmd === "doctor") {
-    process.exitCode = await runDoctor(process.env["UU_CLI_PATH"]);
+    process.exitCode = await runDoctor(process.env["UU_CLI_PATH"], rest[0]);
     return;
   }
   const cli = await resolveCli();
