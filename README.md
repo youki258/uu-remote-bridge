@@ -57,7 +57,7 @@ node bin\uu-bridge.cjs kill <device_id> <session_id>
 |---|---|---|---|
 | 管理面（`list` / `device list` / `echo` / `version` / `-d` / 能力探测） | 4.41.0.2311 | 2026-09-18 本机 `list` → 退出码 0 | ✅ |
 | term 管道通道（`exec` / `read` / `write` / `pty`） | 4.39.2 | `TEST-REPORT.md` 38 项验收（2026-09-09 ~ 09-10） | ✅ |
-| term 管道通道（`exec` / `read` / `write`） | 主控端 4.41.0.2311 × 被控端 LAPTOP-KV444JCT | 2026-09-19 `exec` 8/8 正确、`write`/`read` 700B 字节级一致 + SHA256 双向吻合 | ✅ |
+| term 管道通道（`exec` / `read` / `write`） | 主控端 4.41.0.2311 × 被控端 <device> | 2026-09-19 `exec` 8/8 正确、`write`/`read` 700B 字节级一致 + SHA256 双向吻合 | ✅ |
 
 低于 V4.39.0 的主控端不能连接，且旧版 CLI 的 `term` 只有 `open/exit`、没有本项目依赖的管道通道。**V4.39.0 是必要非充分条件：主控端必须不低于被控端**——被控端自动静默升级后，旧主控端会直接报「主控端版本过低」。未列出的版本不等于不支持，先跑 `doctor` 再动手。
 

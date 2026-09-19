@@ -1,6 +1,6 @@
 ---
 name: uu-remote-bridge
-description: "Use when the user wants to execute commands, read/write files, open interactive terminals, or manage devices on a REMOTE machine via NetEase UU Remote (网易UU远程/GameViewer/uuyc-cli) — e.g. 在admin上执行命令、连一下某台主机的终端、从远程机器拿文件、远程终端自动化. Runs commands on remote devices non-interactively from the local agent session; use when user mentions UU远程, uuyc-cli, or asks to operate a remote PC by device name."
+description: "Use when the user wants to execute commands, read/write files, open interactive terminals, or manage devices on a REMOTE machine via NetEase UU Remote (网易UU远程/GameViewer/uuyc-cli) — e.g. 在某台远程电脑上执行命令、连接一台主机的终端、从远程机器拿文件、远程终端自动化. Runs commands on remote devices non-interactively from the local agent session; use when user mentions UU远程, uuyc-cli, or asks to operate a remote PC by device name."
 origin: "Execution core from song-chaoyang/uu-remote-vscode (MIT); operational rules from yinren112/uu-remote-ops; official JSON/error-code conventions from NetEase vendor skill (uuyc.163.com/help/cli.html); merged & audited 2026-09-07"
 ---
 

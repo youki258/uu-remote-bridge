@@ -1,6 +1,6 @@
 # uu-remote-bridge 生产级验收报告
 
-日期: 2026-09-09 ~ 09-10 | 被测: bin/uu-bridge.cjs (+ scripts) | 目标: ADMIN (<device_id>, Windows)
+日期: 2026-09-09 ~ 09-10 | 被测: bin/uu-bridge.cjs (+ scripts) | 目标: <device> (<device_id>, Windows)
 
 被测版本: UU远程 4.39.2（CLI 同版本，Windows → Windows）。复验记录: 4.41.0.2311 管理面通过（2026-09-18），term 管道通道待复测。
 
@@ -15,7 +15,7 @@
 | 管理面（`list` / `device list` / `echo` / `version` / `-d` / 能力探测） | ✅ 通过（`list` 退出码 0；`term --help` 含 `--device-id/--new-session/--list-sessions/--shell` → termChannel=true） |
 | term 管道通道（`exec` / `read` / `write` / `pty`） | ❌ 阻塞：**官方协议不兼容**，非本项目缺陷 |
 
-**原始日志**（被控端 LAPTOP-KV444JCT，`uuyc-cli term --device-id … --new-session`，stderr，退出码 6）：
+**原始日志**（被控端 <device>，`uuyc-cli term --device-id … --new-session`，stderr，退出码 6）：
 
 ```
 [系统] 启动终端会话...
@@ -36,7 +36,7 @@
 
 **结论修正（2026-09-19）**：该报文**不可作为版本不兼容的判据**。同一对机器、同版本（未升级任何一端）在 09-19 恢复正常——当时报此错时通道实际可用（GUI 终端在跑），指向误导性错误报文 + 通道占用/更新期瞬时态。凡遇此报文，先做 GUI 交叉验证与清场重试。
 
-## 2026-09-19 端到端验收（主控端 4.41.0.2311 × LAPTOP-KV444JCT）
+## 2026-09-19 端到端验收（主控端 4.41.0.2311 × 被控端 <device>）
 
 前置门禁：设备在线 + `No active sessions`。
 
@@ -62,6 +62,29 @@
 | F-9 | `pullPages()` 仅在整页返回 **0 行**时重试；页内丢行（26 行只回 24 行）被接受 | `exec` 大输出可能**静默缺行** | 让分页命令同时回报该页非空行数，按期望值校验并重试该页 |
 
 **未验证**：`pty` 交互、被控端锁屏时的账户验证行为。
+
+## 2026-09-19 全面测试（主控端 4.41.0.2311 × 被控端 <device>，GUI 终端同开）
+
+| 模块 | 测试 | 结果 |
+|---|---|---|
+| 管理面 | `doctor` / `list` / `sessions` | ✅ 全部正常（GUI 会话同时存在也不阻塞） |
+| exec | 基本/中文/错误路径（非零命令不中断） | ✅ |
+| exec | 60 行 ×3 + 200 行 ×2（分页完整性逐行 diff） | ✅ 全部完整，零丢行、零 `Cl` 残行 |
+| write | 1200B 随机二进制 | ✅ 4.9s |
+| read | 回读 `cmp` 字节级一致 + SHA256 双向吻合 | ✅ 5.96s |
+| read/write | 38B 中文+空行/空白行边界文件 | ✅（重试后一致） |
+| pty | 管道输入交互（echo 命令 + PTY-OK 回显） | ✅ |
+| 会话卫生 | 只 kill 自己的会话，用户的 GUI 会话保留 | ✅ 远程临时文件清零、会话清零 |
+
+**结论**：健康连接下全部通过；当日早些时候的失败（丢行、空输出、`主控端版本过低` 报文）均发生在 UU远程 主控端掉线/重连窗口内，**不属于本项目缺陷**。
+
+### 本轮记录的已知限制
+
+| # | 现象 | 说明 |
+|---|---|---|
+| F-9 | 通道不稳定窗口内，分页输出可能丢行/行内容被擦（如 `LINE-105` 变成 `     105`） | 仅在不稳定窗口复现；健康窗口下 200/200 ×2 全通过。修复尝试（页级行数校验+换哨兵重试）反而导致第 2 页起超时，**已回退**，原始补丁存档于 `vendor/wip/f9-pages-verify.patch`（不进 Git）。用户侧缓解：对关键输出用 `NAME=VALUE` 结构化标记 + 行数/哈希自行校验 |
+| F-10 | 输出管道接 `\| head` 等下游提前关流时，进程带 EPIPE 堆栈崩溃 | Node stdout 的 EPIPE 未处理；小瑕疵 |
+| 其他 | 首次建会话后首条命令偶发空输出（当日观察 2 次，均发生于不稳定窗口） | 同上，建议对关键命令重跑确认 |
 
 ## 修复的缺陷(测试驱动)
 | # | 缺陷 | 根因 | 修复 |
@@ -102,7 +125,7 @@ echo通信/list设备/doctor体检/会话基线 全 PASS
 ## 原始日志
 === uu-remote-bridge 生产级验收 2026-09-10 15:22:13 ===
 B1 rc=0 out=ping
-B2 rc=0 out=[<device_id>	ADMIN	online=true	platform=1]
+B2 rc=0 out=[<device_id>	<device_name>	online=true	platform=1]
 B2-PASS
 B3 rc=0
 === uu-doctor (read-only) ===
