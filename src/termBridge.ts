@@ -245,11 +245,12 @@ export class TermBridge {
     this.onStderr?.(line);
   }
 
-  /** stderr 中的关键错误行(过滤连接进度噪声),用于超时诊断 */
+  /** stderr 中的关键错误行(过滤连接进度噪声;含错因关键词的行永远保留),用于超时诊断 */
   private stderrDiagnosis(): string {
-    const meaningful = this.stderrTail.filter(
-      (l) => !/^\[连接\]|^\[系统\]|^\[终端\]|^─+$|^\[提示\]|^Warning:/i.test(l),
-    );
+    const noise = /^\[连接\]|^\[系统\]|^\[终端\]|^─+$|^\[提示\]|^Warning:/i;
+    // 不按前缀一刀切:如「[终端] 主控端版本过低…」前缀是噪声类但内容是真正的错因
+    const signal = /版本|不兼容|过低|失败|错误|拒绝|不存在|超时|无效|未找到|不支持|Error/i;
+    const meaningful = this.stderrTail.filter((l) => signal.test(l) || !noise.test(l));
     return meaningful.length > 0 ? meaningful.join(';').slice(0, 200) : '';
   }
 
