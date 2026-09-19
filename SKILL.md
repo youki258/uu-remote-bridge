@@ -12,7 +12,7 @@ origin: "Execution core from song-chaoyang/uu-remote-vscode (MIT); operational r
 
 - 本机 UU远程 主程序**运行且已登录**，账号与被控端**同账号**（未运行 → 退出码 2 / 错误码 1002，未登录 → 1001）
 - **主控端与被控端均为 V4.39.0 及以上**（旧版主控端不能连新版被控端）。本项目**不绑定版本**：`term` 通道能力运行时探测，升级 UU远程 后无需改配置
-- 被控端支持 Windows / macOS，Linux/移动端不支持；**实测范围仅 Windows 被控端**。锁屏进终端需系统账户验证（Windows 主控端发起需手动输密码）
+- 被控端支持 Windows / macOS；**实测范围仅 Windows 被控端**。锁屏进终端需系统账户验证（Windows 主控端发起需手动输密码）
 - Node.js ≥ 20
 
 ## 工具位置（自包含）
