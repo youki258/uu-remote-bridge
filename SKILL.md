@@ -1,7 +1,10 @@
 ---
 name: uu-remote-bridge
-description: "Use when the user wants to execute commands, read/write files, open interactive terminals, or manage devices on a REMOTE machine via NetEase UU Remote (网易UU远程/GameViewer/uuyc-cli) — e.g. 在某台远程电脑上执行命令、连接一台主机的终端、从远程机器拿文件、远程终端自动化. Runs commands on remote devices non-interactively from the local agent session; use when user mentions UU远程, uuyc-cli, or asks to operate a remote PC by device name."
-origin: "Execution core from song-chaoyang/uu-remote-vscode (MIT); operational rules from yinren112/uu-remote-ops; official JSON/error-code conventions from NetEase vendor skill (uuyc.163.com/help/cli.html); merged & audited 2026-09-07"
+description: "Non-interactively run commands, transfer small files, and answer interactive prompts on a REMOTE Windows PC through NetEase UU Remote (网易UU远程/GameViewer/uuyc-cli term) — 在某台远程电脑上执行命令、跑脚本、取回小文件、处理 ssh/Read-Host 交互提示. Use when the user mentions UU远程, uuyc-cli, or asks to operate a remote PC by device name. Device/cloudpc/assist management belongs to the official `uuyc-cli` skill, not this one."
+license: MIT
+metadata:
+  origin: "Execution core from song-chaoyang/uu-remote-vscode (MIT); operational rules from yinren112/uu-remote-ops; official JSON/error-code conventions from NetEase vendor skill (uuyc.163.com/help/cli.html); merged & audited 2026-09-07"
+  protocol-evidence: "PROTOCOL.md — 屏幕 39行×120列 等常量均为 2026-09-19 在 UU远程 4.41.0.2311 上实测逆推，带原始字节证据"
 ---
 
 # uu-remote-bridge
@@ -12,7 +15,8 @@ origin: "Execution core from song-chaoyang/uu-remote-vscode (MIT); operational r
 
 - 本机 UU远程 主程序**运行且已登录**，账号与被控端**同账号**（未运行 → 退出码 2 / 错误码 1002，未登录 → 1001）
 - **主控端与被控端均为 V4.39.0 及以上**（旧版主控端不能连新版被控端）。本项目**不绑定版本**：`term` 通道能力运行时探测，升级 UU远程 后无需改配置
-- 被控端支持 Windows / macOS；**实测范围仅 Windows 被控端**。锁屏进终端需系统账户验证（Windows 主控端发起需手动输密码）
+- 被控端：官方明文 **term 仅支持 Windows 被控端**（macOS 被控端尚未支持）；本项目仓库里的 zsh/bash 分支是**未验证的实验代码**，不要对外宣称支持
+- 被控端**锁屏时 CLI 管道通道同样被拦**（无 TTY → 取空密码 → `Error: empty password` / 退出码 6），必须先解锁再自动化
 - Node.js ≥ 20
 
 ## 工具位置（自包含）
@@ -22,7 +26,7 @@ origin: "Execution core from song-chaoyang/uu-remote-vscode (MIT); operational r
 | `bin/uu-bridge.cjs` | 编译好的单文件 CLI（仅启动官方 uuyc-cli，无网络/eval/遥测） |
 | `src/` | TypeScript 源码（可审计、可重编译） |
 | `scripts/uu-doctor.ps1` | 只读体检：CLI 存在性、主程序通信、设备在线、现有会话（动手前先跑） |
-| `scripts/uu-push-file.ps1` | 小文件分块推送（上游脚本，当前版本标记渲染未适配，暂用 `write` 替代） |
+| `scripts/uu-push-file.ps1` | ⚠️ **不可用**：上游脚本在当前服务端版本下标记渲染丢失（2026-09 复测确认），小文件推送请用 `write` |
 | `vendor/official-docs/` | 官方文档全文存档 + `INDEX.md`（硬约束/待验项）。**不进 Git、克隆后不存在**；仅本地参考 |
 
 Windows 上调用（skill 目录通常为 `%USERPROFILE%\.agents\skills\uu-remote-bridge`）：
@@ -57,8 +61,24 @@ node "%USERPROFILE%\.agents\skills\uu-remote-bridge\bin\uu-bridge.cjs" <子命�
 node ...\bin\uu-bridge.cjs list
 node ...\bin\uu-bridge.cjs exec <device_id> "Get-PSDrive -PSProvider FileSystem"
 node ...\bin\uu-bridge.cjs exec <device_id> "Get-Content C:\Users\xx\log.txt -Tail 20"
-pwsh -File scripts\uu-push-file.ps1 -DeviceId <device_id> -LocalPath .\fix.ps1 -RemotePath 'C:\fix.ps1'
+node ...\bin\uu-bridge.cjs write <device_id> 'C:\fix.ps1' .\fix.ps1
 ```
+
+## 实测安全包络与校验语义（2026-09-19，4.41.0.2311）
+
+屏幕是 **39 行 × 120 列**，超长行按 120 列折行——因此「输出行数」不等于「屏上行数」。
+
+| 负载 | 结论 |
+|---|---|
+| `exec` 输出行 ≤120 列 | 可信 |
+| `exec` 输出行 >120 列 | 旧版**静默丢行**（121 列 → 30 行只回 4 行）；现按**屏行成本**分页并对端回报行数，不符则换哨兵重拉，仍不符**报错** |
+| `read` ≤1KB | 可信 |
+| `read` ≥8KB | 旧版可能静默返回变长数据；现要求远端 `UU_FLEN` 长度标记，**取不到就失败** |
+| `write` | 受吞吐限制（~1.7KB/s）；超时后**远端状态未知**，消息会给出 SHA256 核对命令 |
+
+**校验语义：校验缺失 = 失败**（不再「取不到标记就跳过校验」）。
+
+诊断工具：`tools/protocol-probe.cjs`（真机取证）、`tools/protocol-regress.cjs`（离线重放 `tests/fixtures/*.raw`，不触远程）。
 
 ## 运营铁律
 
@@ -111,11 +131,14 @@ pwsh -File scripts\uu-push-file.ps1 -DeviceId <device_id> -LocalPath .\fix.ps1 -
 - 官方「端口映射」是 **GUI 能力、无 CLI 命令**，且关闭面板即失效，不作自动化通道
 - 实测版本矩阵见 `README.md`「版本与兼容」
 
-## 重编译（修改 src 后）
+## 重编译与离线回归（修改 src 后）
 
 ```powershell
 cd <skill-dir>/src
 npx esbuild main.ts --bundle --platform=node --outfile=..\bin\uu-bridge.cjs
+cd ..
+npx esbuild tools/protocol-regress.ts --bundle --platform=node --outfile=tools/protocol-regress.cjs
+node tools/protocol-regress.cjs      # 离线重放 tests/fixtures/*.raw，不需要真机
 ```
 
 ## 来源与溯源
@@ -124,4 +147,6 @@ npx esbuild main.ts --bundle --platform=node --outfile=..\bin\uu-bridge.cjs
 - 运营规程：https://github.com/yinren112/uu-remote-ops （409/PS5.1/GBK/分块传输）
 - 官方规范：https://uuyc.163.com/help/cli.html 及官方 skill zip（JSON 约定、错误码）
 - 官方文档（版本门槛/平台限制/退出码）：[CLI 教程](https://uuyc.163.com/blog/20260625-cli.html)、[终端说明](https://uuyc.163.com/help/20260509/40220_1299599.html)、[端口映射](https://uuyc.163.com/help/20260423/40220_1297526.html)
+- 协议常量与原始字节证据：`PROTOCOL.md`（屏幕 39×120、折行阈值、ECH、退出清屏、尺寸安全包络）
+- **2026-09-19 复测（4.41.0.2311）**：见 `TEST-REPORT.md` 末节。修正了 `vt.ts`「24 行屏幕」的错误注释（实为 39 行），并确认屏幕宽 120 列、超长行折行
 - **2026-09 生产验收修复**（8 阶段 38 项测试驱动）：Clear-Host 冲刷替代 60 空行（服务端差分渲染器会丢宽行）、VtScreen 补 ECH(CSI X)、限流退避重试、哨兵后静默确认、分页自愈 + b64 长度强校验（杜绝静默损坏）、read/write 显式 MISS/FAIL 标记、新增 sessions/kill 子命令

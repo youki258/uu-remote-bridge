@@ -2,3 +2,4 @@ node_modules/
 *.log
 vendor/
 raw-*.log
+PLAN.md

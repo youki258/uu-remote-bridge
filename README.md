@@ -22,6 +22,7 @@ node bin\uu-bridge.cjs exec <device_id> "hostname"
 - Node.js ≥ 20
 
 作为 agent skill 使用：整个目录拷到 `%USERPROFILE%\.agents\skills\uu-remote-bridge`（Claude Code / pi / Codex 的 skill 目录），`SKILL.md` 自动生效。
+运行时只需要 `SKILL.md` + `bin/` + `scripts/`；`PROTOCOL.md`（协议常量）、`PLAN.md`/`TEST-REPORT.md`（开发记录）、`tools/`/`tests/`（取证与离线回归）均不影响 skill 加载。
 
 ## 命令
 
@@ -54,8 +55,17 @@ node bin\uu-bridge.cjs exec <device_id> "hostname"
 | 单次 exec 全程 | ~7s（含握手） |
 | 读吞吐 | ~0.8-1.2KB/s（64KB ≈ 55s） |
 | 写吞吐 | ~1.7KB/s（64KB ≈ 40s） |
-| read 上限 | 256KB |
+| read 上限 | 256KB（**实测可信区间见下**） |
 | write 上限 | 512KB |
+
+**实测安全包络（2026-09-19，4.41.0.2311）**：屏幕为 **39 行 × 120 列**，超长行按 120 列折行，所以「输出行数」≠「屏上行数」——
+旧版在此处是静默出错的：`exec` 输出行 >120 列时 30 行只回 4 行；`read` 在 ≥8KB 时返回过变长错误数据（均 `exit=0`）。当前版本已改为：
+
+- 分页按**屏行成本**计算（`ceil(len/120)`），对端回报本页非空行数，不符则换新哨兵重拉，仍不符**显式报错**
+- `read` 强制要求远端 `UU_FLEN` 长度标记，**取不到就失败**（不再「取不到就跳过校验」）
+- 写入超时消息明确「远端状态未知」并给出 `Get-FileHash` 核对命令
+
+证据与常量：`PROTOCOL.md`；离线回归：`node tools/protocol-regress.cjs`（重放 `tests/fixtures/*.raw`，不触远程）。
 
 - `exec/read/write` 仅支持 powershell；cmd/zsh 或交互场景用 `pty`
 - 更大文件走 UU远程 GUI 文件传输，传完用 `exec` 核对 SHA256
