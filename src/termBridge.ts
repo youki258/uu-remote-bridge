@@ -69,6 +69,15 @@ interface ShellProtocol {
 }
 
 /** 提示符/回显行过滤(PowerShell 实测;zsh 哨兵提取不依赖此项,仅防御) */
+/** 冲刷命令回显的前缀残片(实测 4.41 偶发只渲染出 "Cl" 这类前缀) */
+function isFlushFragment(t: string, fullCmd: string): boolean {
+  const cmd = fullCmd.trim();
+  return t.length >= 2 && t.length <= 24 && cmd.startsWith(t);
+}
+
+/** 回显里夹带的桥内部脚手架 token(不可能属于用户输出) */
+const SCAFFOLD_RE = /uuOut|UU_B|UU_E_|UU_N_/;
+
 function isNoiseLine(t: string, fullCmd: string): boolean {
   if (t === '' || /^PS [^>]*>\s*$/.test(t) || /^\s*[A-Za-z]:\\[^>]*>\s*$/.test(t)) {
     return true;
@@ -76,6 +85,9 @@ function isNoiseLine(t: string, fullCmd: string): boolean {
   const em = /^PS [^>]*>\s?(.*)$/.exec(t);
   if (em && (fullCmd.startsWith(em[1].slice(0, 16)) || em[1].startsWith(fullCmd.slice(0, 16)))) {
     return true; // 输入回显行
+  }
+  if (SCAFFOLD_RE.test(t) || isFlushFragment(t, fullCmd)) {
+    return true; // 冲刷残片 / 回显夹带的内部 token
   }
   return false;
 }

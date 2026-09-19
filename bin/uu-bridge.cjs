@@ -826,12 +826,20 @@ var BridgeError = class extends Error {
 };
 var PAGE_ROWS = 26;
 var BEGIN_MARKER = "UU_BEGIN";
+function isFlushFragment(t, fullCmd) {
+  const cmd = fullCmd.trim();
+  return t.length >= 2 && t.length <= 24 && cmd.startsWith(t);
+}
+var SCAFFOLD_RE = /uuOut|UU_B|UU_E_|UU_N_/;
 function isNoiseLine(t, fullCmd) {
   if (t === "" || /^PS [^>]*>\s*$/.test(t) || /^\s*[A-Za-z]:\\[^>]*>\s*$/.test(t)) {
     return true;
   }
   const em = /^PS [^>]*>\s?(.*)$/.exec(t);
   if (em && (fullCmd.startsWith(em[1].slice(0, 16)) || em[1].startsWith(fullCmd.slice(0, 16)))) {
+    return true;
+  }
+  if (SCAFFOLD_RE.test(t) || isFlushFragment(t, fullCmd)) {
     return true;
   }
   return false;
